@@ -1,0 +1,6 @@
+{
+  "include": ["tinybird/resources.py"],
+  "token": "${TINYBIRD_TOKEN}",
+  "base_url": "${TINYBIRD_HOST}",
+  "dev_mode": "branch"
+}

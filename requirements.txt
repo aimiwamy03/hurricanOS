@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+httpx
+openai
+pydantic
+python-dotenv
+tenacity
+nimble_python
+pillow
+tinybird-sdk

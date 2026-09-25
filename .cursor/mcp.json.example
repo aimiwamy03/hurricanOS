@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "nimble-mcp-server": {
+      "url": "https://mcp.nimbleway.com/mcp",
+      "headers": {
+        "Authorization": "Bearer NIMBLE_API_KEY"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "summary": "Hurricane Nolo is being watched for the Big Island and Maui. Confirm the track with the National Weather Service before any supply trip.",
+  "track_shift": false,
+  "expected_onset_hst": null,
+  "areas": [
+    {"area": "Hilo", "proposed_phase": "BEFORE", "confidence": 0.4},
+    {"area": "Kona", "proposed_phase": "BEFORE", "confidence": 0.3}
+  ],
+  "official_links": [
+    {"title": "National Weather Service Honolulu", "url": "https://www.weather.gov/hfo/"}
+  ]
+}
