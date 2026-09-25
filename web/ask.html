@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask — Shelfwatch</title>
+<meta name="theme-color" content="#0a0a0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Shelfwatch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Ask</h1>
+  <span class="sub">Answered by Liquid LFM2.5 running locally, from the saved snapshot. Works with the internet down.</span>
+  <nav class="nav"><a href="/">Main screen</a><a href="/offline">Text-only view</a></nav>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="banner hidden" id="banner"></div>
+
+<div class="ask-wrap">
+  <h2>Offline assistant</h2>
+  <p class="ask-hero">What do you need to know?</p>
+  <form id="ask-form">
+    <label class="sr-only" for="question">Your question</label>
+    <textarea id="question" placeholder="Where's the nearest open shelter to Hilo?" autofocus></textarea>
+    <p><button class="primary" id="send" type="submit">Ask</button></p>
+  </form>
+  <div class="suggest" id="suggest"></div>
+  <div class="panel hidden" id="answer" style="margin-top:16px"></div>
+</div>
+
+<script src="/static/app.js"></script>
+<script src="/static/ask.js"></script>
+<script>
+async function refreshStatus() {
+  try {
+    const data = await getJSON("/api/overview");
+    document.getElementById("chips").innerHTML = [
+      `<span class="chip ${data.online ? "live" : "stale"}">Internet <b>${data.online ? "up" : "down"}</b></span>`,
+      `<span class="chip">Data as of <b>${esc(data.snapshot_clock_hst || "—")}</b></span>`,
+    ].join("");
+    const banner = document.getElementById("banner");
+    if (data.online && navigator.onLine) {
+      banner.classList.add("hidden");
+    } else {
+      banner.textContent = `Offline — showing data from ${data.snapshot_clock_hst || "the last sync"}. The model runs locally, so answers keep coming.`;
+      banner.classList.remove("hidden");
+    }
+  } catch (error) {
+    /* The page still works: /api/ask reads the same local database. */
+  }
+}
+
+initAsk({ onAnswered: refreshStatus });
+refreshStatus();
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>

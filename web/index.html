@@ -1,0 +1,1275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shelfwatch</title>
+<meta name="theme-color" content="#0a0a0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Shelfwatch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="mapstage">
+<header class="topbar">
+  <div class="brand">
+    <h1>Shelfwatch</h1>
+    <span class="sub" id="subtitle">Hurricane Nolo &middot; Hawai&#699;i Island and Maui</span>
+  </div>
+  <!-- One control: the saved places, then a field to add another. -->
+  <div class="places">
+    <div class="placechips" id="places" role="tablist" aria-label="Your places"></div>
+    <form class="zipbox" id="zipform" autocomplete="off">
+      <input id="zipinput" inputmode="numeric" pattern="[0-9]*" maxlength="5" placeholder="Add ZIP" aria-label="Add a ZIP to watch" aria-describedby="you">
+      <button type="button" class="icon" id="geo" title="Use my location" aria-label="Use my location">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <button type="submit" class="icon add" title="Add this ZIP" aria-label="Add this ZIP">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </form>
+  </div>
+  <div class="topright">
+    <span class="status" id="chips"></span>
+    <nav class="nav">
+      <a href="/offline">Text-only</a>
+      <a href="/crisis">Current crises</a>
+      <a href="/agent">Agent</a>
+    </nav>
+  </div>
+</header>
+
+<div class="banner hidden" id="banner"></div>
+<div class="you hidden" id="you" role="status"></div>
+
+<!-- The map is the page: it fills the space under the header and the panels float over it. -->
+<div class="stage">
+  <div id="map" aria-label="Map of stores the agent found"></div>
+  <main>
+    <section class="col rail rail-left">
+      <!-- One panel at a time instead of one long scroll. The safety panel is never tabbed away. -->
+      <div class="railtabs" role="tablist" aria-label="Panels">
+        <button type="button" role="tab" id="tab-now" data-tab="now"><i class="tabdot"></i>Now</button>
+        <button type="button" role="tab" id="tab-supplies" data-tab="supplies">Supplies</button>
+        <button type="button" role="tab" id="tab-storm" data-tab="storm">Storm</button>
+      </div>
+      <div class="panel now" id="now" data-pane="now" aria-live="polite"><h2>What to do now</h2><div class="skel" role="status" aria-label="Loading"><i class="lg w60"></i><i></i><i class="w80"></i><i class="block"></i></div></div>
+      <div class="panel amber hidden" id="safety"></div>
+      <div class="panel finder" data-pane="supplies">
+        <div class="finder-head">
+          <div>
+            <h2 id="stock-title">Supplies</h2>
+            <p class="finder-sum" id="stock-sum"></p>
+          </div>
+          <label class="searchbox">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            <input type="search" id="find" placeholder="Find a supply" autocomplete="off" aria-label="Find a supply">
+          </label>
+        </div>
+        <div id="stock"><div class="skel" role="status" aria-label="Loading"><i class="w40"></i><span class="skel-grid"><i></i><i></i><i></i><i></i><i></i><i></i></span></div></div>
+      </div>
+      <div class="panel" id="storm" data-pane="storm"><h2>Latest advisory</h2><div class="skel" role="status" aria-label="Loading"><i class="w80"></i><i></i><i class="w60"></i></div></div>
+      <div class="panel" id="links" data-pane="storm"><h2>Official sources</h2><div class="skel" role="status" aria-label="Loading"><i class="w60"></i><i class="w80"></i><i class="w40"></i></div></div>
+    </section>
+
+    <div class="stage-center"><p class="maplabel" id="maplabel"></p></div>
+
+    <section class="col rail rail-right">
+      <div class="panel ask-panel" id="ask">
+        <h2>Ask a question</h2>
+        <p class="ask-lede" id="ask-lede">Answered from the saved data by a local model, not a cloud AI, so it keeps working when the internet is down.</p>
+        <form id="ask-form">
+          <label class="sr-only" for="question">Your question</label>
+          <textarea id="question" aria-describedby="ask-lede" placeholder="Where's the nearest open shelter to Hilo?"></textarea>
+          <p><button class="primary" id="send" type="submit">Ask</button></p>
+        </form>
+        <div class="suggest" id="suggest"></div>
+        <div class="ask-answer hidden" id="answer"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/ask.js"></script>
+<script>
+const REFRESH_MS = 20000;
+let selectedZip = null;
+let map = null;
+let pins = null;
+let mapFitKey = null;
+let mapShowAll = false;  // "Show all stores" button: frame every store instead of the chosen place
+const NEAR_MILES = 25;   // stores this close to the chosen place are framed with it
+let lastSnapshot = null;
+let lastStock = null;
+let lastStores = [];
+let lastAreas = [];
+let essentials = [];
+
+function chip(text, cls = "") {
+  return `<span class="chip ${cls}">${text}</span>`;
+}
+
+function renderHeader(data) {
+  const agent = data.agent || {};
+  const fresh = agent.last_step_minutes_ago != null && agent.last_step_minutes_ago < 20;
+  const live = data.online && fresh;
+  const state = !data.online ? "Offline" : fresh ? "Live" : "Delayed";
+  const box = document.getElementById("chips");
+  box.className = `status ${live ? "live" : "stale"}`;
+  box.title = `Internet ${data.online ? "up" : "down"}; data as of ${data.snapshot_clock_hst || "unknown"}`;
+  box.innerHTML = `<span class="status-dot"></span>${state} <span class="status-time">&middot; ${esc(data.snapshot_clock_hst || "—")}</span>`;
+}
+
+function renderStorm(update) {
+  const panel = document.getElementById("storm");
+  if (!update) {
+    panel.innerHTML = `<h2>Latest advisory</h2><p class="muted">No advisory read yet.</p>`;
+    return;
+  }
+  // Watches and warnings are quoted word for word from the NHC advisory; only the
+  // track summary comes from the model, and it is labelled that way.
+  const official = update.official_text
+    ? `<p><b>${esc(update.official_text)}</b></p>
+       <p class="small muted">Quoted from the ${update.official_url ? link(update.official_url, "NHC advisory") : "NHC advisory"}, read ${esc(update.official_read_hst || "")}</p>`
+    : "";
+  panel.innerHTML = `<h2>Latest advisory &middot; read ${esc(update.read_hst || "")}</h2>
+    ${official}
+    <p>${esc(update.summary || "")}</p>
+    <p class="small muted">Track summary written by the local AI model from ${update.source_url ? link(update.source_url, "this source") : "the sources"}. Check it against the official advisory.</p>`;
+}
+
+function setBanner(online, snapshotClock) {
+  const banner = document.getElementById("banner");
+  if (online) {
+    banner.classList.add("hidden");
+    return;
+  }
+  banner.textContent = `Offline — showing data from ${snapshotClock || "the last sync"}. The Ask box still answers from this snapshot.`;
+  banner.classList.remove("hidden");
+}
+
+function renderAreas(areas) {
+  lastAreas = areas;
+  if (areas.length && !areas.some((area) => area.zip === selectedZip)) selectedZip = areas[0].zip;
+  renderPlaces();
+}
+
+function renderStock(data) {
+  lastStock = data;
+  const panel = document.getElementById("stock");
+  const safety = document.getElementById("safety");
+  if (data.shopping_allowed === false) {
+    safety.innerHTML = `<h3>Do not travel for supplies in ${esc(data.zip)}</h3>
+      <p>${esc(data.message)}</p>
+      ${tipsHtml(data.tips)}
+      <ul class="links">${(data.official_links || []).map((row) => `<li>${link(row.url, row.label || row.title)} <span class="tag">${esc(row.kind)}</span></li>`).join("")}</ul>
+      <p class="small"><a href="/api/cards/${encodeURIComponent(data.zip)}" target="_blank">Share this as an image</a></p>`;
+    safety.classList.remove("hidden");
+    setStockTitle("Supplies");
+    document.getElementById("stock-sum").textContent = "";
+    panel.innerHTML = `<p class="muted">Hidden while ${esc(data.zip)} is in the DURING phase. Supplies come back when officials give the all-clear.</p>`;
+    return;
+  }
+  if (data.caution) {
+    safety.innerHTML = `<h3>Heads up</h3><p>${esc(data.caution)}</p>${tipsHtml(data.tips)}`;
+    safety.classList.remove("hidden");
+  } else {
+    safety.classList.add("hidden");
+  }
+  renderSupplies();
+}
+
+function setStockTitle(text) {
+  document.getElementById("stock-title").textContent = text;
+}
+
+// ── Your ZIP ───────────────────────────────────────────
+// Any Hawaiʻi ZIP works: the page then shows the nearest area the agent watches on the
+// same island, and never points someone at a store across the ocean.
+const ME_KEY = "shelfwatch.me";
+let me = loadMe();
+
+function loadMe() {
+  try { return JSON.parse(localStorage.getItem(ME_KEY) || "null"); } catch { return null; }
+}
+
+function saveMe(value) {
+  try {
+    if (value) localStorage.setItem(ME_KEY, JSON.stringify(value));
+    else localStorage.removeItem(ME_KEY);
+  } catch { /* private window: the ZIP just isn't remembered */ }
+}
+
+// Saved places: every ZIP (or location) the user added, kept in this browser.
+// `me` is the one in focus; the chips in the top bar switch between them.
+const PLACES_KEY = "shelfwatch.places";
+let places = loadPlaces();
+
+function loadPlaces() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PLACES_KEY) || "null");
+    if (Array.isArray(saved)) return saved;
+  } catch { /* fall through */ }
+  return me ? [me] : [];
+}
+
+function savePlaces() {
+  try { localStorage.setItem(PLACES_KEY, JSON.stringify(places)); } catch { /* not remembered */ }
+}
+
+function placeKey(place) {
+  return place.zip || "here";
+}
+
+function shortArea(name) {
+  return String(name || "").split(" / ")[0];
+}
+
+function placeLabel(place) {
+  const near = (place.nearest || []).find((row) => row.same_island);
+  const where = near ? shortArea(near.area) : place.island || "";
+  return `<b>${esc(place.zip || "My location")}</b>${where ? ` ${esc(where)}` : ""}`;
+}
+
+function phaseTag(zip) {
+  const area = lastAreas.find((row) => row.zip === zip);
+  if (!area || !area.phase || area.phase === "BEFORE") return "";
+  return ` <span class="place-phase ${area.phase === "DURING" ? "during" : ""}">${esc(area.phase)}</span>`;
+}
+
+// How fresh an area's stock data is, from the newest check at any of its stores.
+const FRESH_MIN = 30;
+
+function freshness(zip) {
+  const ages = lastStores.filter((store) => store.zip === zip)
+    .flatMap((store) => (store.items || []).map((item) => item.checked_min_ago))
+    .filter((age) => age != null);
+  if (!ages.length) return { cls: "none", text: "No stock checks here yet" };
+  const newest = Math.min(...ages);
+  return newest <= FRESH_MIN
+    ? { cls: "live", text: `Live: last stock check ${newest} min ago` }
+    : { cls: "stale", text: `Last stock check ${ago(newest).replace("checked ", "")}` };
+}
+
+function freshDot(zip) {
+  if (!zip || !lastStores.length) return "";
+  const fresh = freshness(zip);
+  return `<i class="fresh ${fresh.cls}" title="${esc(fresh.text)}" aria-label="${esc(fresh.text)}"></i>`;
+}
+
+function renderPlaces() {
+  const box = document.getElementById("places");
+  if (places.length) {
+    const focused = me ? placeKey(me) : null;
+    box.innerHTML = places.map((place, index) => `
+      <span class="place" role="tab" aria-selected="${placeKey(place) === focused}">
+        <button type="button" class="place-go" data-index="${index}">${freshDot(homeZipOf(place))}${placeLabel(place)}${phaseTag(homeZipOf(place))}</button>
+        <button type="button" class="place-x" data-index="${index}" aria-label="Remove ${esc(place.zip || "my location")}">&times;</button>
+      </span>`).join("");
+    box.querySelectorAll(".place-go").forEach((button) => {
+      button.onclick = () => focusPlace(places[Number(button.dataset.index)]);
+    });
+    box.querySelectorAll(".place-x").forEach((button) => {
+      button.onclick = () => removePlace(Number(button.dataset.index));
+    });
+    return;
+  }
+  // Nothing saved yet: offer the areas the agent watches so there is always something to pick.
+  box.innerHTML = lastAreas.map((area) => `
+    <span class="place starter" role="tab" aria-selected="${area.zip === selectedZip}">
+      <button type="button" class="place-go" data-zip="${esc(area.zip)}">${freshDot(area.zip)}<b>${esc(area.zip)}</b> ${esc(shortArea(area.area))}${phaseTag(area.zip)}</button>
+    </span>`).join("");
+  box.querySelectorAll(".place-go").forEach((button) => {
+    button.onclick = () => {
+      selectedZip = button.dataset.zip;
+      focusMapOnZip(selectedZip);
+      refresh();
+    };
+  });
+}
+
+function focusPlace(place) {
+  me = place;
+  saveMe(me);
+  const zip = homeZip();
+  if (zip) selectedZip = zip;
+  renderYou();
+  renderPlaces();
+  mapShowAll = false;
+  if (lastMap && place.lat != null) renderMap(lastMap.payload, lastMap.online);
+  else focusMapOnZip(selectedZip);
+  refresh();
+}
+
+function removePlace(index) {
+  const removed = places.splice(index, 1)[0];
+  savePlaces();
+  if (me && placeKey(me) === placeKey(removed)) {
+    if (places.length) return focusPlace(places[0]);
+    me = null;
+    saveMe(null);
+    renderYou();
+  }
+  renderPlaces();
+  refresh();
+}
+
+async function focusMapOnZip(zip) {
+  if (!map || !zip) return;
+  const points = lastStores.filter((store) => store.zip === zip && store.lat != null).map((store) => [store.lat, store.lng]);
+  if (points.length) {
+    map.flyToBounds(points, { ...railPadding(), maxZoom: 12, duration: 0.8 });
+    return;
+  }
+  // No stores researched in this ZIP yet: go to the middle of the ZIP instead.
+  try {
+    const place = await getJSON(`/api/zip/${encodeURIComponent(zip)}`);
+    map.flyToBounds(L.latLng(place.lat, place.lng).toBounds(12000), { ...railPadding(), duration: 0.8 });
+  } catch { /* unknown ZIP: leave the map where it is */ }
+}
+
+function milesBetween(a, b) {
+  const rad = (d) => (d * Math.PI) / 180;
+  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return 3958.8 * 2 * Math.asin(Math.sqrt(h));
+}
+
+function homeZipOf(place) {
+  if (!place) return null;
+  if (place.watched) return place.zip;
+  const near = (place.nearest || []).find((row) => row.same_island);
+  return near ? near.zip : null;
+}
+
+function homeZip() {
+  return homeZipOf(me);
+}
+
+function youMessage(text, warn = false) {
+  const box = document.getElementById("you");
+  box.className = `you${warn ? " warn" : ""}`;
+  box.innerHTML = text;
+}
+
+function renderYou() {
+  const box = document.getElementById("you");
+  if (!me) {
+    box.className = "you hidden";
+    return;
+  }
+  const who = me.zip ? `<b>${esc(me.zip)}</b>` : "<b>Your location</b>";
+  const island = me.island ? ` &middot; ${esc(me.island)}` : "";
+  const near = (me.nearest || []).find((row) => row.same_island);
+  let text;
+  let warn = false;
+  if (me.watched) {
+    text = `Shelfwatch checks stores in this ZIP. Showing ${esc(near ? near.area : me.zip)}.`;
+  } else if (near) {
+    text = `Not watched yet. Showing the nearest watched area, <b>${esc(near.area)}</b> (stores about ${esc(Math.round(near.miles))} mi away).`;
+  } else {
+    warn = true;
+    text = `Shelfwatch isn't checking any stores on ${esc(me.island || "your island")} yet. The stores below are on another island, so don't count on them. ` +
+      `Use the official sources and call stores before you go.`;
+  }
+  youMessage(`${who}${island} &middot; ${text}`, warn);
+}
+
+function applyMe(value) {
+  places = places.filter((place) => placeKey(place) !== placeKey(value));
+  places.push(value);
+  savePlaces();
+  document.getElementById("zipinput").value = "";
+  focusPlace(value);
+}
+
+async function setZip(raw) {
+  const zip = String(raw || "").trim();
+  if (!/^\d{5}$/.test(zip)) {
+    youMessage("Type a 5-digit ZIP, like 96720.", true);
+    return;
+  }
+  try {
+    applyMe(await getJSON(`/api/zip/${encodeURIComponent(zip)}`));
+  } catch (error) {
+    youMessage(/404/.test(error.message)
+      ? `<b>${esc(zip)}</b> isn't a Hawaiʻi ZIP. Shelfwatch only covers Hawaiʻi for Hurricane Nolo.`
+      : "Couldn't look that ZIP up just now. Try again in a moment.", true);
+  }
+}
+
+function useLocation() {
+  if (!navigator.geolocation) {
+    youMessage("This browser can't share its location. Type your ZIP instead.", true);
+    return;
+  }
+  youMessage("Finding you…");
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    try {
+      applyMe(await getJSON(`/api/locate?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`));
+    } catch {
+      youMessage("Couldn't use your location just now. Type your ZIP instead.", true);
+    }
+  }, () => youMessage("Location is blocked or unavailable. Type your ZIP instead.", true),
+  { timeout: 10000, maximumAge: 10 * 60 * 1000 });
+}
+
+// ── Supply search ──────────────────────────────────────
+// Searches every store the agent checked (not just the selected area), best bet first:
+// in stock, then closest to you, then most recent.
+const SYNONYMS = {
+  aa_batteries: ["battery", "batteries", "aa"],
+  d_batteries: ["battery", "batteries", "d cell"],
+  bottled_water: ["water", "drink"],
+  flashlight: ["light", "torch", "lantern", "headlamp"],
+  generator: ["generator", "electric"],
+  power_bank: ["charger", "phone", "power bank", "battery pack", "usb"],
+  gas_can: ["gas", "fuel", "gasoline", "petrol", "jerry"],
+  tarp: ["tarp", "roof", "cover", "plastic"],
+  sandbags: ["sandbag", "sand", "flood"],
+  first_aid_kit: ["first aid", "medical", "bandage", "medicine", "aid"],
+  aaa_batteries: ["aaa", "battery", "batteries"],
+  lantern: ["lantern", "camp light"],
+  weather_radio: ["radio", "weather radio", "noaa", "hand crank"],
+  canned_food: ["food", "canned", "nonperishable", "non-perishable"],
+  can_opener: ["opener", "manual can opener"],
+  water_jug: ["water jug", "water container", "water storage"],
+  propane: ["propane", "fuel cylinder"],
+  camp_stove: ["stove", "camping stove", "camp stove"],
+  cooler: ["cooler", "ice chest"],
+  duct_tape: ["duct tape", "tape"],
+};
+const STATUS_RANK = { in_stock: 0, low: 1, out: 2 };
+
+function searchQuery() {
+  return document.getElementById("find").value.trim().toLowerCase();
+}
+
+function matchEssentials(query) {
+  return essentials.filter((item) => item.name.toLowerCase().includes(query) ||
+    (SYNONYMS[item.key] || []).some((word) => word.startsWith(query) || query.includes(word)));
+}
+
+// Tapping a tile picks that supply; typing filters the tiles. Either way the map and the
+// list under the grid show every checked store for the matching supplies.
+let pickedItem = null;
+
+function wantedKeys() {
+  if (pickedItem) return new Set([pickedItem]);
+  const query = searchQuery();
+  if (!query) return null;
+  return new Set(matchEssentials(query).map((item) => item.key));
+}
+
+function supplyStatus(key, data) {
+  const item = (data.items || []).find((row) => row.essential_key === key);
+  if (item) return item;
+  return { status: "unchecked" };
+}
+
+// Shown above the results, not as a footnote: this is the one thing people must not miss.
+const ONLINE_NOTE = `<p class="online-note"><b>Online pickup, not a shelf count.</b> These come from Walmart's website for this ZIP. ` +
+  `Shelves empty faster than the website updates, and pickup orders claim stock first. Call the store before you drive.</p>`;
+
+function shortAgo(minutes) {
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ago`;
+}
+
+const TILE_WORDS = {
+  ...STATUS_TEXT,
+  in_stock: "Available online",
+  unknown: "No matching products",
+  unverified: "Can't verify",
+  unchecked: "Not checked yet",
+};
+const TILE_RANK = { in_stock: 0, low: 1, listed: 2, out: 3, unknown: 4, failed: 5, unverified: 6, unchecked: 7 };
+
+function tileWord(item) {
+  if (item.result_state === "listed") return "Listed at Home Depot";
+  if (item.result_state === "failed") return "Search failed";
+  if (item.result_state === "no_match") return "Not sold at Walmart";
+  return TILE_WORDS[item.status] || statusLabel(item.status);
+}
+
+function tileKind(item) {
+  if (item.result_state === "listed") return "listed";
+  if (item.result_state === "failed") return "unknown";
+  return item.status;
+}
+
+function renderSupplies() {
+  const data = lastStock;
+  if (!data || data.shopping_allowed === false || !essentials.length) return;
+  const panel = document.getElementById("stock");
+  const query = searchQuery();
+  const shown = pickedItem
+    ? essentials.filter((item) => item.key === pickedItem)
+    : (query ? matchEssentials(query) : [...essentials].sort((a, b) =>
+        (TILE_RANK[tileKind(supplyStatus(a.key, data))] ?? 9) - (TILE_RANK[tileKind(supplyStatus(b.key, data))] ?? 9)
+        || a.name.localeCompare(b.name)));
+  const area = lastAreas.find((row) => row.zip === data.zip);
+  setStockTitle(`Supplies · ${area ? shortArea(area.area) : data.zip}`);
+  const items = data.items || [];
+  const inStock = items.filter((item) => item.status === "in_stock").length;
+  const newest = Math.min(...items.map((item) => item.checked_min_ago ?? Infinity));
+  document.getElementById("stock-sum").textContent = items.length
+    ? `${inStock} available online · ${items.length} of ${essentials.length} searched · newest ${ago(Number.isFinite(newest) ? newest : null).replace("checked ", "")}`
+    : "No checks for this area yet";
+
+  // The agent's forecast for this area: anything likely to run out is flagged on its tile.
+  const risks = new Map((data.forecasts || []).filter((row) => Number(row.risk) >= 0.5).map((row) => [row.essential_key, row]));
+  const nameOf = (key) => (essentials.find((row) => row.key === key) || {}).name || key;
+  const runout = risks.size && !query
+    ? `<div class="runout"><span class="runout-icon" aria-hidden="true">&#9660;</span><span><b>Running out:</b> ` +
+      [...risks.keys()].map((key) => `<button type="button" class="linkish" data-key="${esc(key)}">${esc(nameOf(key))}</button>`).join(", ") +
+      `</span></div>`
+    : "";
+
+  const tiles = shown.map((essential) => {
+    const item = supplyStatus(essential.key, data);
+    const risky = risks.has(essential.key);
+    // Each tile says how old its check is; price shows in "Where to get it" after a tap.
+    const price = item.checked_min_ago != null ? ` · ${shortAgo(item.checked_min_ago)}` : "";
+    return `<button type="button" class="supply ${esc(tileKind(item))}${risky ? " risky" : ""}" data-key="${esc(essential.key)}" aria-pressed="${pickedItem === essential.key}">
+        ${essential.pictogram ? `<img src="${esc(essential.pictogram)}" alt="">` : `<span class="supply-noicon" aria-hidden="true"></span>`}
+        <span class="supply-text">
+          <span class="supply-name"><span>${esc(essential.name)}</span>${risky ? `<span class="supply-flag" title="Running out">&#9660;</span>` : ""}</span>
+          <span class="supply-status"><i></i>${esc(tileWord(item))}${esc(price)}</span>
+        </span>
+      </button>`;
+  }).join("");
+  const grid = shown.length
+    ? `<div class="supply-grid${pickedItem ? " picking" : ""}">${tiles}</div>`
+    : `<p class="muted">No supply matches “${esc(query)}”. Shelfwatch checks: ${esc(essentials.map((e) => e.name).join(", "))}.</p>`;
+  const keys = wantedKeys();
+  const why = pickedItem && risks.has(pickedItem)
+    ? `<p class="runout-why"><b>Running out.</b> ${esc(risks.get(pickedItem).reason.replace(/^[^:]+:\s*/, ""))}</p>`
+    : "";
+  const note = `<details class="online-note-box"${pickedItem ? "" : " open"}><summary>Online pickup, not a shelf count</summary>${ONLINE_NOTE}</details>`;
+  const back = pickedItem ? `<p class="small"><button type="button" class="linkish" id="all-supplies">All supplies</button></p>` : "";
+  panel.innerHTML = note + runout + back + grid +
+    (keys && keys.size ? `<div class="supply-detail">${why}${whereToGet(keys)}</div>` : "") +
+    (data.caution ? "" : tipsHtml(data.tips, "Get ready")) +
+    (data.card ? `<p class="small"><a href="${esc(data.card)}" target="_blank">Share this update as an image</a></p>` : "");
+  panel.querySelectorAll(".supply, .runout button").forEach((tile) => {
+    tile.onclick = () => {
+      pickedItem = pickedItem === tile.dataset.key ? null : tile.dataset.key;
+      document.getElementById("find").value = "";
+      onSearch();
+    };
+  });
+  const all = document.getElementById("all-supplies");
+  if (all) all.onclick = () => { pickedItem = null; onSearch(); };
+}
+
+function onSearch() {
+  if (searchQuery()) pickedItem = null;
+  renderSupplies();
+  if (lastMap) renderMap(lastMap.payload, lastMap.online);
+}
+
+// ── Shelf reports ──────────────────────────────────────
+// People in a store say what's on the shelf. Fresh reports (last hour) outrank Walmart's
+// online data: "on the shelf" goes above "available online", "shelf empty" goes to the bottom,
+// and when people disagree it says so instead of picking a side.
+const SHELF_TEXT = { has: "On the shelf", empty: "Shelf empty", mixed: "Reports disagree" };
+const SHELF_CLASS = { has: "in_stock", empty: "out", mixed: "low" };
+const DEVICE_KEY = "shelfwatch.device";
+let sessionDevice = null;
+
+function deviceId() {
+  const fresh = () => (window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = fresh();
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return (sessionDevice ||= fresh());
+  }
+}
+
+function people(n) {
+  return `${n} ${n === 1 ? "person" : "people"}`;
+}
+
+function reportSentence(report) {
+  const when = report.newest_min < 1 ? "just now" : `latest ${report.newest_min} min ago`;
+  if (report.verdict === "mixed") return `${people(report.has)} saw it, ${people(report.empty)} found it empty · ${when}`;
+  if (report.verdict === "has") return `${people(report.has)} saw it on the shelf · ${when}`;
+  return `${people(report.empty)} found the shelf empty · ${when}`;
+}
+
+function shelfRank(item, report) {
+  if (report) return { has: -1, mixed: 1.5, empty: 5 }[report.verdict];
+  if (item?.result_state === "listed") return 2.2;
+  if (item?.result_state === "no_match") return 4;
+  return STATUS_RANK[item?.status] ?? 3;
+}
+
+function reportButtons(store, key) {
+  return `<div class="report-row" data-store="${esc(store.id)}" data-key="${esc(key)}">
+      <span class="report-q">At this store now?</span>
+      <button type="button" class="rep has" data-verdict="has">On the shelf</button>
+      <button type="button" class="rep empty" data-verdict="empty">Shelf empty</button>
+    </div>`;
+}
+
+async function sendReport(row, verdict) {
+  const note = (text, bad = false) => { row.innerHTML = `<span class="report-done${bad ? " bad" : ""}">${esc(text)}</span>`; };
+  row.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  try {
+    const response = await fetch("/api/reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ store_id: Number(row.dataset.store), essential_key: row.dataset.key, verdict, device: deviceId() }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      note(body.detail || "Couldn't save that report. Try again.", true);
+      return;
+    }
+    note(`Thanks. ${reportSentence(body.summary)}.`);
+    refresh();
+  } catch {
+    note("No connection to Shelfwatch. Your report wasn't saved.", true);
+  }
+}
+
+// One handler for every report button, wherever it is drawn. Leaflet 1.9 lets clicks in
+// popups bubble up to the page, so this also covers the map popups.
+function onReportClick(event) {
+  const button = event.target.closest(".report-row button[data-verdict]");
+  if (button) sendReport(button.closest(".report-row"), button.dataset.verdict);
+}
+document.addEventListener("click", onReportClick);
+
+// The panel redraws every 20 s; keep the "more stores" list open if someone opened it.
+let quietOpen = false;
+document.addEventListener("toggle", (event) => {
+  if (event.target.classList?.contains("quiet-stores")) quietOpen = event.target.open;
+}, true);
+
+// Every store with a shelf report or an online check for the wanted supplies, most likely
+// first: seen on the shelf, then available online, then closest to you, then newest.
+function whereToGet(keys) {
+  const wanted = essentials.filter((item) => keys.has(item.key));
+  const sameIsland = new Map((me?.nearest || []).map((row) => [row.zip, row.same_island]));
+  const hits = [];
+  const quiet = [];
+  for (const store of lastStores) {
+    const miles = me && store.lat != null ? milesBetween(me, store) : null;
+    const far = me ? sameIsland.get(store.zip) === false : false;
+    let any = false;
+    for (const key of keys) {
+      const item = (store.items || []).find((row) => row.essential_key === key);
+      const report = (store.reports || {})[key];
+      if (!item && !report) continue;
+      any = true;
+      const name = (essentials.find((row) => row.key === key) || {}).name || key;
+      hits.push({ key, name, item, report, store, miles, far });
+    }
+    if (!any && !far && usuallyCarries(store, keys)) quiet.push({ store, miles });
+  }
+  hits.sort((a, b) =>
+    shelfRank(a.item, a.report) - shelfRank(b.item, b.report) ||
+    (a.far - b.far) ||
+    ((a.miles ?? 0) - (b.miles ?? 0)) ||
+    ((a.item?.checked_min_ago ?? 1e9) - (b.item?.checked_min_ago ?? 1e9)));
+  const title = wanted.length === 1 ? `Where to get ${wanted[0].name.toLowerCase()}` : "Where to get them";
+  const top = hits[0];
+  const likely = top && !top.far && (top.report ? top.report.verdict === "has" : top.item?.status === "in_stock");
+  const rows = hits.map((hit, index) => searchRow(hit, index === 0 && likely)).join("");
+  quiet.sort((a, b) => (a.miles ?? 0) - (b.miles ?? 0));
+  const quietList = quiet.length ? `<details class="quiet-stores"${quietOpen ? " open" : ""}><summary>${quiet.length} more stores that usually carry it, no reading yet: call, or report if you're there</summary>
+      ${quiet.slice(0, 8).map(({ store, miles }) => `<div class="item"><div class="grow">
+        <div><b>${esc(store.name)}</b> <span class="kind-tag ${storeKind(store)}">${esc(STORE_KINDS[storeKind(store)].label)}</span></div>
+        <div class="meta">${esc(store.address || store.zip)}${miles == null ? "" : ` &middot; ~${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`}</div>
+        ${callButton(store)}
+        ${wanted.length === 1 ? reportButtons(store, wanted[0].key) : ""}
+      </div></div>`).join("")}</details>` : "";
+  return `<h3 class="detail-title">${esc(title)}</h3>` +
+    (rows || `<p class="muted small">No store has a shelf report or online check for ${esc(wanted.map((e) => e.name).join(", "))} yet.</p>`) +
+    quietList +
+    (rows && !me ? `<p class="small muted">Add your ZIP at the top to sort by distance.</p>` : "");
+}
+
+function callButton(store) {
+  if (!store.phone) return "";
+  return `<a class="callstore" href="tel:${esc(store.phone.replace(/[^0-9+]/g, ""))}">Call ${esc(store.phone)}</a>`;
+}
+
+// The row's own line already says "Online:", so these stay short.
+const ONLINE_SHORT = { in_stock: "available for pickup", low: "few available", out: "none available" };
+
+function productList(item) {
+  const products = item.products || [];
+  if (!products.length) {
+    return item.result_note ? `<p class="product-note">${esc(item.result_note)}</p>` : "";
+  }
+  const matched = item.matched ?? products.length;
+  const available = item.available ?? products.filter((product) => product.in_stock).length;
+  const summary = `${products.length} shown · ${available} of ${matched} matching available`;
+  const rows = products.map((product) => {
+    const href = safeURL(product.url);
+    const image = safeURL(product.image);
+    const name = href
+      ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(product.name)}</a>`
+      : `<span>${esc(product.name)}</span>`;
+    const price = product.price != null ? `$${Number(product.price).toFixed(2)}` : "Price not listed";
+    const unit = product.unit_price ? ` · ${esc(product.unit_price)}` : "";
+    const availability = product.availability || (product.in_stock ? "Available" : "Not available");
+    return `<div class="product">
+      ${image ? `<img src="${esc(image)}" alt="" loading="lazy">` : ""}
+      <div class="grow"><div class="product-name">${name}</div>
+        <div class="meta">${esc(price)}${unit} · ${esc(availability)}</div>
+      </div>
+    </div>`;
+  }).join("");
+  return `<details class="products"><summary>${esc(summary)}</summary>${rows}</details>`;
+}
+
+function searchRow({ key, name, item, report, store, miles, far }, best) {
+  const dist = miles == null ? "" : ` &middot; ${far ? "other island" : `~${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`}`;
+  const directions = store.source_url ? ` &middot; ${link(store.source_url, "map")}` : "";
+  const shelf = report
+    ? `<div class="shelf-report ${esc(report.verdict)}"><span class="shelf-k">People in the store</span>${esc(reportSentence(report))}</div>`
+    : "";
+  const online = item
+    ? `<div class="meta"><b class="age">Online: ${esc(item.result_state === "listed" ? "listed, no in-store count" : item.result_state === "no_match" ? "not sold for pickup here" : item.result_state === "failed" ? "search failed" : (ONLINE_SHORT[item.status] || statusLabel(item.status)))}, ${esc(ago(item.checked_min_ago))}</b>${item.price ? ` &middot; $${esc(Number(item.price).toFixed(2))}` : ""}${item.store_name ? ` &middot; ${esc(item.store_name)}` : ""}${directions}</div>`
+    : `<div class="meta">No online reading for this store${directions}</div>`;
+  const badge = report
+    ? `<span class="pill ${esc(SHELF_CLASS[report.verdict])}">${esc(SHELF_TEXT[report.verdict])}</span>`
+    : `<span class="pill ${esc(item.status)}">${esc(TILE_WORDS[item.status] || statusLabel(item.status))}</span>`;
+  return `<div class="item${best ? " best" : ""}">
+      ${best ? `<div class="best-tag">Most likely</div>` : ""}
+      <div class="grow">
+        <div><b>${esc(name)}</b> <span class="muted">at</span> <b>${esc(store.name)}</b></div>
+        <div class="meta">${esc(store.address || store.zip)}${dist}</div>
+        ${shelf}
+        ${online}
+        ${item ? productList(item) : ""}
+        ${callButton(store)}
+        ${item && !report ? confidenceHtml(item.confidence) : ""}
+        ${far ? "" : reportButtons(store, key)}
+      </div>
+      ${badge}
+    </div>`;
+}
+
+function linkList(rows) {
+  return `<ul class="links">${rows.map((row) => `<li>${link(row.url, row.label || row.title)} <span class="tag">${esc(row.kind)}</span></li>`).join("")}</ul>`;
+}
+
+function renderLinks(links, news) {
+  document.getElementById("links").innerHTML = `<h2>Official sources</h2>` +
+    (links.length ? linkList(links) : `<p class="muted">No official links saved yet.</p>`) +
+    ((news || []).length ? `<h3 class="small muted">News reports (not official)</h3>${linkList(news)}` : "");
+}
+
+// On wide screens the rails cover the map's edges, so pins are fitted into the open middle.
+function railPadding() {
+  const left = document.querySelector(".rail-left");
+  const right = document.querySelector(".rail-right");
+  if (!window.matchMedia("(min-width: 1101px)").matches) return { paddingTopLeft: [30, 30], paddingBottomRight: [190, 30] };
+  return {
+    paddingTopLeft: [left.offsetWidth + 56, 40],
+    // Pin labels hang off the right of each pin, so leave room for them on that side.
+    paddingBottomRight: [right.offsetWidth + 56 + 190, 96],
+  };
+}
+
+// ── Map pins ───────────────────────────────────────────
+// Colour only ever means stock: green in stock, amber few options, red none found.
+// A checked store is a ring split by those shares, with the in-stock count in the middle.
+// While a supply is searched, each store shows just that item.
+// Stores with no reading are still worth knowing about, so they show as small squares
+// coloured by what kind of store they are (never green/amber/red: that stays for stock).
+const UNCHECKED_KEY = "shelfwatch.showOthers";
+let showUnchecked = true;
+try { showUnchecked = localStorage.getItem(UNCHECKED_KEY) !== "0"; } catch { /* default on */ }
+
+// What each kind of store usually stocks. A rule of thumb from the store type, not a reading.
+const STORE_KINDS = {
+  hardware: { label: "Hardware", carries: ["tarp", "generator", "gas_can", "sandbags", "flashlight", "lantern", "aa_batteries", "aaa_batteries", "d_batteries", "power_bank", "weather_radio", "water_jug", "propane", "camp_stove", "cooler", "duct_tape"] },
+  general: { label: "General store", carries: ["bottled_water", "aa_batteries", "aaa_batteries", "d_batteries", "flashlight", "lantern", "weather_radio", "canned_food", "can_opener", "water_jug", "first_aid_kit", "power_bank", "tarp", "propane", "camp_stove", "cooler", "duct_tape"] },
+  office: { label: "Office & electronics", carries: ["aa_batteries", "aaa_batteries", "d_batteries", "power_bank", "flashlight", "lantern", "weather_radio", "duct_tape"] },
+  other: { label: "Unlikely to help", carries: [] },
+};
+
+function storeKind(store) {
+  const name = `${store.chain || ""} ${store.name || ""}`.toLowerCase();
+  if (/walmart|target|costco|safeway|kta|foodland|longs|cvs|times super|sack n save|dollar/.test(name)) return "general";
+  if (/home_depot|home depot|lowe|\bace\b|hardware|hdwe|hpm|building supply|lumber|honsador|tractor supply/.test(name)) return "hardware";
+  if (/officemax|office depot|best buy|radioshack/.test(name)) return "office";
+  return "other";
+}
+
+function usuallyCarries(store, keys) {
+  const carries = STORE_KINDS[storeKind(store)].carries;
+  return [...keys].some((key) => carries.includes(key));
+}
+
+function kindPin(store) {
+  const kind = storeKind(store);
+  return L.divIcon({ className: "pin", iconSize: [14, 14], iconAnchor: [7, 7], html: `<div class="pin-kind ${kind}"></div>` });
+}
+
+function kindCarriesText(store) {
+  const names = STORE_KINDS[storeKind(store)].carries.map((key) => (essentials.find((row) => row.key === key) || {}).name).filter(Boolean);
+  return names.length ? `Stores like this usually carry ${names.join(", ").toLowerCase()}.` : "Not a usual stop for hurricane supplies.";
+}
+
+function kindTip(store) {
+  const kind = STORE_KINDS[storeKind(store)];
+  return `<b>${esc(store.name)}</b> &middot; ${esc(kind.label)}<br><span class="muted">${esc(kindCarriesText(store))} No reading yet.</span>`;
+}
+let lastMap = null;
+
+// Legend chips double as filters: tap one to hide or show those pins. Remembered per browser.
+const HIDDEN_KEY = "shelfwatch.mapHidden";
+const STOCK_GROUPS = [["in_stock", "Available online"], ["low", "Few online"], ["out", "None online"]];
+let mapHidden = new Set();
+try { mapHidden = new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")); } catch { /* show all */ }
+
+function toggleMapGroup(group) {
+  if (group === "*") mapHidden.clear();
+  else if (mapHidden.has(group)) mapHidden.delete(group);
+  else mapHidden.add(group);
+  try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...mapHidden])); } catch { /* not remembered */ }
+  if (lastMap) renderMap(lastMap.payload, lastMap.online);
+}
+
+function legendChip(group, label, count, extra = "") {
+  const on = !mapHidden.has(group);
+  const what = `${count} ${count === 1 ? "store" : "stores"}`;
+  return `<button type="button" class="lg chip ${group} ${extra}" data-group="${group}" aria-pressed="${on}"` +
+    ` title="${on ? "Hide" : "Show"} ${esc(label.toLowerCase())} (${what})"${count ? "" : " disabled"}>` +
+    `${esc(label)} <b>${count}</b></button>`;
+}
+
+function storeTag(store) {
+  const area = lastAreas.find((row) => row.zip === store.zip);
+  return `${store.name}${area ? ` ${shortArea(area.area)}` : ""}`;
+}
+
+function countStatuses(items) {
+  const counts = { in_stock: 0, low: 0, out: 0, unknown: 0 };
+  items.forEach((item) => { counts[item.status in counts ? item.status : "unknown"] += 1; });
+  return counts;
+}
+
+function ringPin(store, items) {
+  const c = countStatuses(items);
+  const total = items.length;
+  const a = (c.in_stock / total) * 100;
+  const b = a + (c.low / total) * 100;
+  const d = b + (c.out / total) * 100;
+  return L.divIcon({
+    className: "pin",
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    html: `<div class="pin-ring" style="--a:${a}%;--b:${b}%;--d:${d}%"><span>${c.in_stock}</span></div>` +
+      `<div class="pin-tag"><b>${esc(storeTag(store))}</b> ${c.in_stock}/${total} available online</div>`,
+  });
+}
+
+function itemPin(store, item, report = null) {
+  const price = item && item.price && !report ? ` &middot; $${esc(Number(item.price).toFixed(2))}` : "";
+  const status = report ? SHELF_CLASS[report.verdict] : item.status;
+  const text = report ? `${SHELF_TEXT[report.verdict]} (${report.has + report.empty})` : statusLabel(item.status);
+  return L.divIcon({
+    className: "pin",
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    html: `<div class="pin-dot ${esc(status)}${report ? " shelf" : ""}"></div>` +
+      `<div class="pin-tag"><b>${esc(storeTag(store))}</b> ${esc(text)}${price}</div>`,
+  });
+}
+
+function reportPin(store, count) {
+  return L.divIcon({
+    className: "pin",
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    html: `<div class="pin-dot shelf"></div><div class="pin-tag"><b>${esc(storeTag(store))}</b> ${count} shelf report${count === 1 ? "" : "s"}</div>`,
+  });
+}
+
+// Shelf reports and the "I'm here" form for one store, inside its map popup.
+function popupReports(store, keys) {
+  const reports = Object.entries(store.reports || {}).filter(([key]) => !keys || keys.has(key));
+  const nameOf = (key) => (essentials.find((row) => row.key === key) || {}).name || key;
+  const seen = reports.length
+    ? `<div class="pop-shelf"><div class="pop-status">People in the store, last hour</div>` +
+      reports.map(([key, report]) => `<div class="pop-shelf-row ${esc(report.verdict)}"><b>${esc(nameOf(key))}</b> ${esc(reportSentence(report))}</div>`).join("") + `</div>`
+    : "";
+  const choices = (keys ? essentials.filter((row) => keys.has(row.key)) : essentials)
+    .map((row) => `<div class="pop-rep"><span>${esc(row.name)}</span>${reportButtons(store, row.key)}</div>`).join("");
+  return seen + `<details class="pop-report"><summary>I'm at this store: report the shelf</summary>${choices}</details>`;
+}
+
+// Compact on purpose: one line per status (not per item), so a store with every item
+// checked still fits in the open middle of the map and leaves room to pan and zoom.
+function storePopup(store, items) {
+  const order = ["in_stock", "low", "out", "unknown"];
+  const groups = order.map((status) => ({ status, names: items.filter((item) => (order.includes(item.status) ? item.status : "unknown") === status).map((item) => item.name) }))
+    .filter((group) => group.names.length);
+  const label = (status) => { const text = statusLabel(status); return text.charAt(0).toUpperCase() + text.slice(1); };
+  const rows = groups.map((group) =>
+    `<div class="pop-group ${esc(group.status)}"><div class="pop-status"><i></i>${esc(label(group.status))} &middot; ${group.names.length}</div>` +
+    `<div class="pop-items">${esc(group.names.join(", "))}</div></div>`).join("");
+  const ages = items.map((item) => item.checked_min_ago).filter((age) => age != null);
+  const when = ages.length
+    ? (Math.min(...ages) === Math.max(...ages) ? ago(Math.min(...ages)) : `checked ${Math.min(...ages)}–${ago(Math.max(...ages)).replace("checked ", "")}`)
+    : "";
+  const actions = [store.source_url ? link(store.source_url, "Directions") : "", callButton(store)].filter(Boolean).join("");
+  return `<div class="pop-head"><b>${esc(store.name)}</b><div class="muted">${esc(store.address || store.address_norm || "")}</div>` +
+    (store.status_label ? `<div class="pop-note">${esc(store.status_label)}</div>` : "") + `</div>` +
+    (actions ? `<div class="pop-actions">${actions}</div>` : "") +
+    (rows
+      ? `<div class="pop-body"><div class="pop-status">Online (Walmart website)</div>${rows}</div><div class="pop-when">${esc(when.charAt(0).toUpperCase() + when.slice(1))}</div>`
+      : `<div class="pop-kind ${storeKind(store)}"><i></i>${esc(STORE_KINDS[storeKind(store)].label)}</div>` +
+        `<div class="pop-note">${esc(kindCarriesText(store))} No online reading for this store: call before you go.</div>`) +
+    popupReports(store, searchedKeys());
+}
+
+// Keep popups inside the open middle of the map, clear of the side panels.
+function popupOptions() {
+  const pad = railPadding();
+  return {
+    className: "store-pop", maxWidth: 300, minWidth: 240, maxHeight: 320,
+    autoPanPaddingTopLeft: pad.paddingTopLeft ? [pad.paddingTopLeft[0] - 32, 24] : [16, 16],
+    autoPanPaddingBottomRight: pad.paddingBottomRight ? [pad.paddingBottomRight[0] - 190 - 32, 96] : [16, 16],
+  };
+}
+
+function searchedKeys() {
+  const keys = essentials.length ? wantedKeys() : null;
+  return keys && keys.size ? keys : null;
+}
+
+// While a store popup is open (someone may be mid-report), the 20 s refresh waits.
+let popupOpen = false;
+
+function renderMap(payload, online) {
+  lastMap = { payload, online };
+  lastStores = payload.stores || [];  // the lists use fresh data even while the map waits
+  if (popupOpen) return;
+  const stores = payload.stores || [];
+  lastStores = stores;
+  const label = document.getElementById("maplabel");
+  const node = document.getElementById("map");
+  if (!online) {
+    node.classList.add("hidden");
+    label.textContent = `Map tiles need the internet. ${stores.length} stores are still listed in the panels and on the text-only view.`;
+    return;
+  }
+  node.classList.remove("hidden");
+  if (!map) {
+    map = L.map("map", { zoomControl: false, attributionControl: false }).setView([19.9, -155.6], 8);
+    L.control.attribution({ position: "topright" }).addTo(map);
+    L.control.zoom({ position: "bottomleft" }).addTo(map);
+    // One click back to the whole picture after zooming into a store.
+    const FitAll = L.Control.extend({
+      onAdd() {
+        const bar = L.DomUtil.create("div", "leaflet-bar");
+        const button = L.DomUtil.create("a", "fit-all", bar);
+        button.href = "#";
+        button.title = "Show all stores";
+        button.setAttribute("role", "button");
+        button.setAttribute("aria-label", "Show all stores");
+        button.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>`;
+        L.DomEvent.on(button, "click", (event) => {
+          L.DomEvent.preventDefault(event);
+          map.closePopup();
+          mapFitKey = null;
+          mapShowAll = true;
+          if (lastMap) renderMap(lastMap.payload, lastMap.online);
+        });
+        L.DomEvent.disableClickPropagation(bar);
+        return bar;
+      },
+    });
+    new FitAll({ position: "bottomleft" }).addTo(map);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap",
+    }).addTo(map);
+    pins = L.layerGroup().addTo(map);
+    map.on("popupopen", () => {
+      popupOpen = true;
+    });
+    map.on("popupclose", () => {
+      popupOpen = false;
+      if (lastMap) renderMap(lastMap.payload, lastMap.online);
+    });
+  }
+  pins.clearLayers();
+  const keys = searchedKeys();
+  const points = [];
+  let checkedCount = 0;
+  let uncheckedCount = 0;
+  const counts = {};
+  stores.forEach((store) => {
+    if (store.lat == null || store.lng == null) return;
+    const all = store.items || [];
+    const items = keys ? all.filter((item) => keys.has(item.essential_key)) : all;
+    if (all.length) checkedCount += 1;
+    else uncheckedCount += 1;
+    let marker;
+    let groups = [];  // legend chips this pin belongs to; none means it is always shown
+    const reports = store.reports || {};
+    const shelfKey = keys ? [...keys].find((key) => reports[key]) : null;
+    if (keys && shelfKey) {
+      // Someone in the store reported the searched item: that is the pin's colour.
+      marker = L.marker([store.lat, store.lng], { icon: itemPin(store, null, reports[shelfKey]), riseOnHover: true });
+    } else if (items.length) {
+      const best = [...items].sort((x, y) => (STATUS_RANK[x.status] ?? 3) - (STATUS_RANK[y.status] ?? 3))[0];
+      // A searched item has one colour; a ring counts under every colour it shows.
+      groups = keys ? [best.status] : [...new Set(items.map((item) => item.status))];
+      groups = groups.filter((group) => STOCK_GROUPS.some(([key]) => key === group));
+      marker = L.marker([store.lat, store.lng], { icon: keys ? itemPin(store, best) : ringPin(store, items), riseOnHover: true });
+    } else if (!keys && Object.keys(reports).length) {
+      marker = L.marker([store.lat, store.lng], { icon: reportPin(store, Object.keys(reports).length), riseOnHover: true });
+    } else if (!all.length && (keys ? usuallyCarries(store, keys) : showUnchecked)) {
+      groups = [storeKind(store)];
+      marker = L.marker([store.lat, store.lng], { icon: kindPin(store), riseOnHover: true })
+        .bindTooltip(kindTip(store), { direction: "top", offset: [0, -8], className: "kind-tip" });
+    } else {
+      return;
+    }
+    groups.forEach((group) => { counts[group] = (counts[group] || 0) + 1; });
+    if (groups.length && groups.every((group) => mapHidden.has(group))) return;
+    marker.bindPopup(storePopup(store, items), popupOptions()).addTo(pins);
+    points.push([store.lat, store.lng]);
+  });
+  if (me && me.lat != null) {
+    L.circleMarker([me.lat, me.lng], { radius: 7, color: "#a0c3ec", weight: 3, fillColor: "#0a0a0a", fillOpacity: 1 })
+      .bindPopup(me.zip ? `You: ZIP ${esc(me.zip)} (middle of the ZIP, approximate)` : "You")
+      .addTo(pins);
+  }
+  // A chosen place wins: frame it plus the stores near it, even where nothing is researched
+  // yet (a ZIP on another island, or one the agent doesn't watch). Otherwise frame every store.
+  let frame = points;
+  if (me && me.lat != null && !mapShowAll) {
+    const near = points.filter(([lat, lng]) => milesBetween(me, { lat, lng }) <= NEAR_MILES);
+    frame = [[me.lat, me.lng], ...near];
+  }
+  // Fit once (and again when the frame changes) so the 20 s refresh doesn't undo the user's panning.
+  const fitKey = (mapShowAll ? "all:" : "") + frame.map((p) => p.join(",")).join(";");
+  if (frame.length && fitKey !== mapFitKey) {
+    const first = mapFitKey === null && !mapShowAll;
+    mapFitKey = fitKey;
+    const bounds = L.latLngBounds(frame);
+    if (frame.length === 1) bounds.extend(L.latLng(frame[0]).toBounds(12000));
+    if (first) map.fitBounds(bounds, { ...railPadding(), maxZoom: 12 });
+    else map.flyToBounds(bounds, { ...railPadding(), maxZoom: 12, duration: 0.8 });
+  }
+  const blocked = payload.blocked_zips || [];
+  const legend = STOCK_GROUPS.map(([group, text]) => legendChip(group, text, counts[group] || 0)).join("") +
+    (me && me.lat != null ? `<span class="lg me">You</span>` : "");
+  const kindsShown = [...new Set(stores.filter((store) => !(store.items || []).length && store.lat != null &&
+    (keys ? usuallyCarries(store, keys) : showUnchecked)).map(storeKind))];
+  const kindLegend = kindsShown.length
+    ? `<span class="legend kinds"><span class="lg-head">No reading yet:</span>` +
+      ["hardware", "general", "office", "other"].filter((kind) => kindsShown.includes(kind))
+        .map((kind) => legendChip(kind, STORE_KINDS[kind].label, counts[kind] || 0, "kind")).join("") + `</span>`
+    : "";
+  const toggle = uncheckedCount && !keys
+    ? `<button type="button" class="linkish" id="toggle-unchecked">${showUnchecked ? "Hide" : "Show"} ${uncheckedCount} with no reading</button>`
+    : "";
+  const scope = keys
+    ? `${esc(essentials.filter((e) => keys.has(e.key)).map((e) => e.name).join(", "))}: checked stores, plus stores that usually carry it.`
+    : `${checkedCount} of ${stores.length} stores stock-checked.`;
+  const ages = stores.flatMap((store) => (store.items || []).map((item) => item.checked_min_ago)).filter((age) => age != null);
+  const newest = ages.length ? Math.min(...ages) : null;
+  const fresh = newest == null ? ""
+    : `<span class="map-fresh"><i class="fresh ${newest <= FRESH_MIN ? "live" : "stale"}"></i>` +
+      `${newest <= FRESH_MIN ? "Live · " : ""}newest check ${newest < 1 ? "just now" : `${newest} min ago`}</span> `;
+  const hiddenNow = [...mapHidden].filter((group) => counts[group]).length;
+  const showAll = hiddenNow ? `<button type="button" class="linkish" data-group="*">Show all</button>` : "";
+  label.innerHTML = `<span class="legend">${legend}</span>${kindLegend}<span class="maplabel-sub">${fresh}${scope} ${toggle}${showAll}` +
+    (blocked.length ? ` ${esc(blocked.join(", "))} hidden: storm conditions.` : "") + `</span>`;
+  label.querySelectorAll("[data-group]").forEach((chip) => {
+    chip.onclick = () => toggleMapGroup(chip.dataset.group);
+  });
+  const button = document.getElementById("toggle-unchecked");
+  if (button) {
+    button.onclick = () => {
+      showUnchecked = !showUnchecked;
+      try { localStorage.setItem(UNCHECKED_KEY, showUnchecked ? "1" : "0"); } catch { /* not remembered */ }
+      renderMap(payload, online);
+    };
+  }
+}
+
+// ── What to do now ─────────────────────────────────────
+// One instruction for your area, the nearest shelters, and who to call. Worked out on
+// the server from saved data (never the model), so it reads the same with the wifi off.
+const NOW_LABEL = {
+  go: "Get ready now",
+  careful: "Be careful",
+  stop: "Stay where you are",
+  unknown: "Follow your county's alerts",
+};
+
+function nowQuery() {
+  if (me && me.zip) return `?zip=${encodeURIComponent(me.zip)}`;
+  if (me && me.lat != null) return `?lat=${me.lat}&lng=${me.lng}`;
+  return "";
+}
+
+function directions(shelter) {
+  const query = `${shelter.name}, ${shelter.address}, HI`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function shelterRow(shelter) {
+  const source = (shelter.sources || [])[0];
+  return `<li class="shelter">
+      <div class="shelter-top"><b>${esc(shelter.name)}</b><span class="shelter-mi">~${esc(Math.round(shelter.miles))} mi</span></div>
+      <div class="meta">${esc(shelter.address)}</div>
+      <div class="meta">${shelter.when ? `Reported: ${esc(shelter.when)} &middot; ` : ""}${link(directions(shelter), "directions")}${source ? ` &middot; ${link(source.url, "source")}` : ""}</div>
+    </li>`;
+}
+
+function renderNow(data) {
+  const panel = document.getElementById("now");
+  // Keep pane-off when a refresh lands while Supplies or Storm is selected.
+  panel.classList.remove("go", "careful", "stop", "unknown");
+  panel.classList.add(data.level);
+  document.getElementById("tab-now").dataset.level = data.level;
+  const official = data.official
+    ? `<p class="now-official"><span class="now-k">Official</span>${esc(data.official.text)} ${data.official.url ? link(data.official.url, "source") : ""}</p>`
+    : "";
+  const calls = data.contacts.map((c) =>
+    `<a class="call${c.phone === "911" ? " urgent" : ""}" href="tel:${esc(c.phone.replace(/[^0-9]/g, ""))}"><span>${esc(c.phone)}</span>${esc(c.name)}</a>`).join("");
+  const shelters = data.shelters.length
+    ? `<ul class="shelters">${data.shelters.map(shelterRow).join("")}</ul>
+       <p class="small muted">From news reports of county announcements. Distances are straight-line from the middle of the ZIP, not driving. Call before you go.</p>`
+    : `<p class="small muted">No shelter reported for ${esc(data.island || "your area")} in the saved research. Call your county below.</p>`;
+  panel.innerHTML = `
+    <div class="now-head"><h2>What to do now</h2>${data.phase ? `<span class="tag">${esc(data.area || "")} &middot; ${esc(data.phase)}</span>` : ""}</div>
+    <p class="now-label">${esc(NOW_LABEL[data.level] || "")}</p>
+    <p class="now-say">${esc(data.instruction)}</p>
+    ${data.caution ? `<p class="small now-caution">${esc(data.caution)}</p>` : ""}
+    ${official}
+    <h3 class="now-sub">${data.located ? "Nearest shelters" : "Shelters near " + esc(data.area || "the watched area")}</h3>
+    ${data.located ? "" : `<p class="small muted">Add your ZIP above for the shelters closest to you.</p>`}
+    ${shelters}
+    <div class="calls">${calls}</div>
+    <p class="now-links">${(data.links || []).map((row) => link(row.url, row.label)).join(" &middot; ")}</p>
+    ${data.alerts_signup ? `<p class="small muted">Emergency alerts: ${esc(data.alerts_signup)}</p>` : ""}`;
+}
+
+// ── Sidebar tabs ───────────────────────────────────────
+const TAB_KEY = "shelfwatch.tab";
+const TABS = ["now", "supplies", "storm"];
+
+function showTab(name) {
+  if (!TABS.includes(name)) name = "now";
+  document.querySelectorAll(".railtabs [data-tab]").forEach((button) => {
+    button.setAttribute("aria-selected", String(button.dataset.tab === name));
+  });
+  document.querySelectorAll(".rail-left [data-pane]").forEach((pane) => {
+    pane.classList.toggle("pane-off", pane.dataset.pane !== name);
+  });
+  document.querySelector(".rail-left").scrollTop = 0;
+  try { localStorage.setItem(TAB_KEY, name); } catch { /* not remembered */ }
+}
+
+document.querySelectorAll(".railtabs [data-tab]").forEach((button) => {
+  button.onclick = () => showTab(button.dataset.tab);
+});
+let savedTab = "now";
+try { savedTab = localStorage.getItem(TAB_KEY) || "now"; } catch { /* first tab */ }
+showTab(savedTab);
+
+async function refreshNow() {
+  try {
+    renderNow(await getJSON(`/api/now${nowQuery()}`));
+  } catch {
+    /* Keep the last card on screen. */
+  }
+}
+
+async function refresh() {
+  let overview;
+  try {
+    overview = await getJSON("/api/overview");
+  } catch (error) {
+    setBanner(false, lastSnapshot);
+    return;
+  }
+  lastSnapshot = overview.snapshot_clock_hst || lastSnapshot;
+  if (!essentials.length && overview.essentials) {
+    essentials = overview.essentials;
+    renderSupplies();
+  }
+  const online = overview.online && navigator.onLine;
+  renderHeader(overview);
+  setBanner(online, overview.snapshot_clock_hst);
+  renderStorm(overview.storm_update);
+  renderAreas(overview.areas || []);
+  refreshNow();
+  if (selectedZip) {
+    const [stock, links, stores] = await Promise.all([
+      getJSON(`/api/stock?zip=${encodeURIComponent(selectedZip)}`),
+      getJSON("/api/links?limit=10"),
+      getJSON("/api/stores"),
+    ]);
+    renderMap(stores, online);
+    renderPlaces();
+    renderStock(stock);
+    renderLinks(links.links || [], links.news || []);
+  }
+}
+
+document.getElementById("zipform").onsubmit = (event) => {
+  event.preventDefault();
+  setZip(document.getElementById("zipinput").value);
+};
+document.getElementById("geo").onclick = useLocation;
+document.getElementById("find").addEventListener("input", onSearch);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+    event.preventDefault();
+    document.getElementById("find").focus();
+  }
+});
+if (me) {
+  selectedZip = homeZip();
+  renderYou();
+}
+if (places.length) savePlaces();
+// /?zip=96778&find=water opens ready to go (handy for sharing and the demo).
+const params = new URLSearchParams(window.location.search);
+if (params.get("find")) {
+  document.getElementById("find").value = params.get("find");
+  showTab("supplies");
+}
+if (params.get("zip")) {
+  document.getElementById("zipinput").value = params.get("zip");
+  setZip(params.get("zip"));
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+initAsk();
+window.addEventListener("online", refresh);
+window.addEventListener("offline", () => setBanner(false, lastSnapshot));
+</script>
+</body>
+</html>

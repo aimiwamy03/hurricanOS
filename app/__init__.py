@@ -1,1 +1,1 @@
-"""Storm Supply Scout application package."""
+"""Shelfwatch application package."""

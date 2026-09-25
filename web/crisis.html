@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Current crisis scan — Shelfwatch</title>
+<meta name="theme-color" content="#0a0a0a">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div>
+    <h1>Current crisis scan</h1>
+    <span class="sub">Nimble finds active crises; local Liquid AI chooses what to look for.</span>
+  </div>
+  <nav class="nav"><a href="/">Main screen</a><a href="/agent">Agent</a></nav>
+</header>
+
+<main class="crisis-main">
+  <section class="panel crisis-step">
+    <div class="step-number">1</div>
+    <h2>Find crises happening now</h2>
+    <form id="discover-form">
+      <label for="scope">Area to search</label>
+      <div class="crisis-form-row">
+        <input id="scope" value="United States" maxlength="80" autocomplete="off">
+        <button class="primary" id="discover" type="submit">Search now</button>
+      </div>
+    </form>
+    <p class="small muted">Nimble searches news for events happening now. The local model groups duplicate reports. Always confirm with official alerts.</p>
+    <p class="crisis-error hidden" id="discover-error" role="alert"></p>
+    <div id="crises"></div>
+  </section>
+
+  <section class="panel crisis-step disabled" id="pick-step">
+    <div class="step-number">2</div>
+    <h2>Pick a crisis</h2>
+    <div id="selection"><p class="muted">Search for current crises first.</p></div>
+    <form id="scan-form" class="hidden">
+      <label for="scan-zip">ZIP code to scan</label>
+      <div class="crisis-form-row">
+        <input id="scan-zip" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" placeholder="96720" required>
+        <button class="primary" id="scan" type="submit">Scan supplies for this crisis</button>
+      </div>
+    </form>
+    <p class="crisis-error hidden" id="scan-error" role="alert"></p>
+  </section>
+
+  <section class="panel crisis-step disabled" id="results-step">
+    <div class="step-number">3</div>
+    <h2>ZIP resources</h2>
+    <div id="scan-results"><p class="muted">Pick a crisis and ZIP to start.</p></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+let crises = [];
+let selected = null;
+let pollTimer = null;
+
+async function api(url, options, timeout = 180000) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: stop.signal, headers: { "Content-Type": "application/json" } });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function busy(button, on, label) {
+  button.disabled = on;
+  if (!button.dataset.label) button.dataset.label = button.textContent;
+  button.textContent = on ? label : button.dataset.label;
+}
+
+function showError(id, error) {
+  const box = document.getElementById(id);
+  box.textContent = error ? error.message : "";
+  box.classList.toggle("hidden", !error);
+}
+
+function renderCrises() {
+  const box = document.getElementById("crises");
+  if (!crises.length) {
+    box.innerHTML = `<p class="muted">No active crises could be confirmed from this search. Try a wider area.</p>`;
+    return;
+  }
+  box.innerHTML = `<div class="crisis-list">${crises.map((crisis, index) => `
+    <button type="button" class="crisis-card" data-index="${index}" aria-pressed="${selected === crisis}">
+      <span class="crisis-type">${esc(crisis.crisis_type)}</span>
+      <b>${esc(crisis.title)}</b>
+      <span>${esc(crisis.location)}</span>
+      <small>${esc(crisis.summary)}</small>
+    </button>`).join("")}</div>`;
+  box.querySelectorAll(".crisis-card").forEach((button) => {
+    button.onclick = () => chooseCrisis(crises[Number(button.dataset.index)]);
+  });
+}
+
+function chooseCrisis(crisis) {
+  selected = crisis;
+  renderCrises();
+  const step = document.getElementById("pick-step");
+  step.classList.remove("disabled");
+  document.getElementById("scan-form").classList.remove("hidden");
+  const sources = (crisis.sources || []).map((source) =>
+    `<li>${link(source.url, source.title || "Source")}</li>`).join("");
+  document.getElementById("selection").innerHTML = `
+    <div class="crisis-selected">
+      <span class="crisis-type">${esc(crisis.crisis_type)}</span>
+      <h3>${esc(crisis.title)}</h3>
+      <p>${esc(crisis.summary)}</p>
+      <p class="small muted">The local model will choose what this crisis needs (for example water for a fire, shelter for hail), then Nimble checks that ZIP.</p>
+      <details><summary>News sources</summary><ul class="links">${sources}</ul></details>
+    </div>`;
+  const zipField = document.getElementById("scan-zip");
+  if (!zipField.value) zipField.value = rememberedZip();
+  zipField.focus();
+}
+
+function rememberedZip() {
+  try {
+    const me = JSON.parse(localStorage.getItem("shelfwatch.me") || "null");
+    if (me && /^\d{5}$/.test(me.zip || "")) return me.zip;
+    const places = JSON.parse(localStorage.getItem("shelfwatch.places") || "[]");
+    const place = (places || []).find((row) => /^\d{5}$/.test(row.zip || ""));
+    return place ? place.zip : "";
+  } catch {
+    return "";
+  }
+}
+
+function resultStatus(resource) {
+  if (resource.status === "pending" || resource.status === "starting") return "Checking at Nimble…";
+  if (resource.status === "error") return resource.error || "Lookup failed";
+  if (resource.kind === "shelter") return `${resource.results.length} shelter leads`;
+  if (resource.result_status === "available") return "Pickup options found";
+  if (resource.result_status === "unavailable") return "No returned option shows available";
+  return "No matching pickup products";
+}
+
+function renderResource(resource) {
+  const pending = resource.status === "pending" || resource.status === "starting";
+  const products = (resource.results || []).map((row) => {
+    if (resource.kind === "shelter") {
+      return `<li><b>${link(row.url, row.name)}</b><span>${esc(row.description || "")}</span></li>`;
+    }
+    const price = row.price != null ? ` · $${Number(row.price).toFixed(2)}` : "";
+    return `<li>
+      ${row.image ? `<img src="${esc(row.image)}" alt="" loading="lazy">` : ""}
+      <span><b>${link(row.url, row.name)}</b><small>${esc(row.availability)}${esc(price)}</small></span>
+    </li>`;
+  }).join("");
+  return `<article class="crisis-resource ${esc(resource.status)}">
+    <div class="resource-head">
+      <div><span class="crisis-type">${resource.kind === "shelter" ? "shelter" : "retail pickup"}</span><h3>${esc(resource.name)}</h3></div>
+      <span class="resource-status${pending ? " pending" : ""}">${esc(resultStatus(resource))}</span>
+    </div>
+    <p>${esc(resource.why)}</p>
+    ${resource.note ? `<p class="small muted">${esc(resource.note)}</p>` : ""}
+    ${products ? `<ul class="resource-results">${products}</ul>` : ""}
+  </article>`;
+}
+
+function renderScan(scan) {
+  const step = document.getElementById("results-step");
+  step.classList.remove("disabled");
+  const done = scan.status === "complete";
+  document.getElementById("scan-results").innerHTML = `
+    <div class="scan-summary">
+      <span class="resource-status${done ? "" : " pending"}">${done ? "Scan complete" : "Scan running"}</span>
+      <h3>${esc(scan.crisis.title)} · ZIP ${esc(scan.zip_code)}</h3>
+      <p class="safety-line">${esc(scan.safety_note)}</p>
+      ${done ? "" : `<p class="small muted">Retail templates can take 5–11 minutes. This page checks the saved task IDs; it does not start duplicate work.</p>`}
+    </div>
+    <div class="resource-list">${scan.resources.map(renderResource).join("")}</div>
+    <p class="online-note"><b>Verify before traveling.</b> Retail results are online pickup availability, not shelf counts. Shelter results are search leads and are not confirmation that a shelter is open.</p>`;
+  clearTimeout(pollTimer);
+  if (!done) pollTimer = setTimeout(() => pollScan(scan.id), 8000);
+}
+
+async function pollScan(id) {
+  try {
+    renderScan(await api(`/api/crises/scans/${encodeURIComponent(id)}`, { method: "GET", headers: {} }, 30000));
+  } catch (error) {
+    showError("scan-error", error);
+  }
+}
+
+document.getElementById("discover-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const button = document.getElementById("discover");
+  showError("discover-error", null);
+  busy(button, true, "Searching…");
+  try {
+    const data = await api("/api/crises/discover", {
+      method: "POST",
+      body: JSON.stringify({ scope: document.getElementById("scope").value }),
+    });
+    crises = data.crises || [];
+    selected = null;
+    document.getElementById("pick-step").classList.toggle("disabled", !crises.length);
+    document.getElementById("scan-form").classList.add("hidden");
+    document.getElementById("selection").innerHTML = crises.length
+      ? `<p class="muted">Choose one crisis below, then enter a ZIP to scrape supplies.</p>`
+      : `<p class="muted">Search for current crises first.</p>`;
+    renderCrises();
+  } catch (error) {
+    showError("discover-error", error);
+  } finally {
+    busy(button, false);
+  }
+};
+
+if (!document.getElementById("scan-zip").value) {
+  document.getElementById("scan-zip").value = rememberedZip();
+}
+
+document.getElementById("scan-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const zip = document.getElementById("scan-zip").value.trim();
+  if (!selected || !/^\d{5}$/.test(zip)) return;
+  const button = document.getElementById("scan");
+  showError("scan-error", null);
+  busy(button, true, "Starting…");
+  try {
+    renderScan(await api("/api/crises/scans", {
+      method: "POST",
+      body: JSON.stringify({ crisis: selected, zip_code: zip }),
+    }));
+  } catch (error) {
+    showError("scan-error", error);
+  } finally {
+    busy(button, false);
+  }
+};
+</script>
+</body>
+</html>

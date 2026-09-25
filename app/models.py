@@ -10,7 +10,11 @@ from pydantic import BaseModel
 class AreaPhase(BaseModel):
     area: str
     proposed_phase: Literal["BEFORE", "DURING", "AFTER"]
-    confidence: float
+    confidence: float = 0.5
+    # Hours until tropical-storm or hurricane conditions reach the area (0 = now),
+    # and the source URL that says so. None when the sources do not say.
+    onset_hours: float | None = None
+    onset_source: str | None = None
 
 
 class StormAssessment(BaseModel):
@@ -36,3 +40,40 @@ class Explanation(BaseModel):
 class AskAnswer(BaseModel):
     answer: str
     cited_ids: list[int] = []
+
+
+class AskQuery(BaseModel):
+    """What a resident's question is about. Plain strings: code checks every value
+    against its own lists, so a made-up town or item is dropped, not trusted."""
+
+    intent: str
+    places: list[str] = []
+    items: list[str] = []
+
+
+class CrisisOption(BaseModel):
+    """One active crisis consolidated from numbered Nimble news results."""
+
+    title: str
+    crisis_type: str
+    location: str
+    summary: str
+    source_ids: list[int] = []
+
+
+class CrisisDiscovery(BaseModel):
+    crises: list[CrisisOption] = []
+
+
+class CrisisResource(BaseModel):
+    """A resource the local model recommends looking up for a selected crisis."""
+
+    name: str
+    kind: Literal["retail", "shelter"]
+    search_terms: str
+    why: str
+
+
+class CrisisResourcePlan(BaseModel):
+    safety_note: str
+    resources: list[CrisisResource] = []

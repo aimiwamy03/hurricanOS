@@ -13,10 +13,13 @@ _conn: sqlite3.Connection | None = None
 _ready = False
 
 COLUMNS: dict[str, tuple[str, ...]] = {
-    "storm_updates": ("id", "ts_utc", "source_url", "summary", "phase_proposed", "advisory_json"),
-    "zips": ("zip", "area", "priority", "reason", "phase", "phase_locked", "updated_ts"),
-    "stores": ("id", "name", "chain", "address_norm", "zip", "lat", "lng", "hours", "source_url", "found_ts"),
+    "storm_updates": (
+        "id", "ts_utc", "source_url", "summary", "phase_proposed", "advisory_json", "official_text", "official_url"
+    ),
+    "zips": ("zip", "area", "priority", "reason", "phase", "phase_locked", "updated_ts", "during_votes"),
+    "stores": ("id", "name", "chain", "address_norm", "zip", "lat", "lng", "hours", "source_url", "found_ts", "phone"),
     "essentials": ("key", "name", "pictogram_path"),
+    "shelf_reports": ("id", "ts_utc", "store_id", "zip", "essential_key", "verdict", "device", "ip"),
     "products": ("id", "essential_key", "chain", "product_id", "url", "title"),
     "stock_checks": (
         "id",
@@ -29,6 +32,15 @@ COLUMNS: dict[str, tuple[str, ...]] = {
         "confidence",
         "level",
         "source_url",
+        "price_flag",
+        "confidence_why",
+        "results",
+        "matched",
+        "available",
+    ),
+    "check_products": (
+        "id", "check_id", "zip", "essential_key", "product_id", "name", "price", "unit_price",
+        "in_stock", "availability", "url", "image",
     ),
     "forecasts": ("id", "ts_utc", "essential_key", "zip", "risk", "reason"),
     "official_links": ("id", "title", "url", "kind", "found_ts"),
@@ -53,7 +65,8 @@ CREATE TABLE IF NOT EXISTS zips (
   reason TEXT,
   phase TEXT,
   phase_locked INTEGER DEFAULT 0,
-  updated_ts TEXT
+  updated_ts TEXT,
+  during_votes INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS stores (
   id INTEGER PRIMARY KEY,
@@ -91,8 +104,25 @@ CREATE TABLE IF NOT EXISTS stock_checks (
   price REAL,
   confidence REAL,
   level TEXT,
-  source_url TEXT
+  source_url TEXT,
+  price_flag INTEGER DEFAULT 0
 );
+-- The individual products behind one stock check (the ones that matched the essential).
+CREATE TABLE IF NOT EXISTS check_products (
+  id INTEGER PRIMARY KEY,
+  check_id INTEGER,
+  zip TEXT,
+  essential_key TEXT,
+  product_id TEXT,
+  name TEXT,
+  price REAL,
+  unit_price TEXT,
+  in_stock INTEGER,
+  availability TEXT,
+  url TEXT,
+  image TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_check_products_check ON check_products(check_id);
 CREATE TABLE IF NOT EXISTS forecasts (
   id INTEGER PRIMARY KEY,
   ts_utc TEXT NOT NULL,
@@ -101,6 +131,19 @@ CREATE TABLE IF NOT EXISTS forecasts (
   risk TEXT,
   reason TEXT
 );
+-- What people standing in a store saw on the shelf. verdict: has | empty.
+-- device is a hash of a random id the browser keeps; ip is only for rate limits.
+CREATE TABLE IF NOT EXISTS shelf_reports (
+  id INTEGER PRIMARY KEY,
+  ts_utc TEXT,
+  store_id INTEGER,
+  zip TEXT,
+  essential_key TEXT,
+  verdict TEXT,
+  device TEXT,
+  ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_shelf_reports_store ON shelf_reports(store_id, essential_key, ts_utc);
 CREATE TABLE IF NOT EXISTS official_links (
   id INTEGER PRIMARY KEY,
   title TEXT,
@@ -143,7 +186,29 @@ def init_db() -> None:
         if _ready:
             return
         connect().executescript(_SCHEMA)
+        _migrate()
         _ready = True
+
+
+def _migrate() -> None:
+    """Columns added after the first run. ALTER TABLE only adds what is missing."""
+    added = [
+        ("stock_checks", "price_flag", "INTEGER DEFAULT 0"),
+        ("zips", "during_votes", "INTEGER DEFAULT 0"),
+        ("storm_updates", "official_text", "TEXT"),
+        ("storm_updates", "official_url", "TEXT"),
+        ("stock_checks", "confidence_why", "TEXT"),
+        ("stores", "phone", "TEXT"),
+        # How many products the search returned, how many were this essential, how many available.
+        ("stock_checks", "results", "INTEGER"),
+        ("stock_checks", "matched", "INTEGER"),
+        ("stock_checks", "available", "INTEGER"),
+    ]
+    for table, column, kind in added:
+        have = {row["name"] for row in connect().execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in have:
+            connect().execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+            connect().commit()
 
 
 def execute(sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
@@ -182,8 +247,8 @@ def upsert_store(row: dict) -> int:
         init_db()
         connect().execute(
             """
-            INSERT INTO stores (name, chain, address_norm, zip, lat, lng, hours, source_url, found_ts)
-            VALUES (:name, :chain, :address_norm, :zip, :lat, :lng, :hours, :source_url, :found_ts)
+            INSERT INTO stores (name, chain, address_norm, zip, lat, lng, hours, source_url, found_ts, phone)
+            VALUES (:name, :chain, :address_norm, :zip, :lat, :lng, :hours, :source_url, :found_ts, :phone)
             ON CONFLICT(chain, address_norm) DO UPDATE SET
               name=excluded.name,
               zip=excluded.zip,
@@ -191,7 +256,8 @@ def upsert_store(row: dict) -> int:
               lng=excluded.lng,
               hours=excluded.hours,
               source_url=excluded.source_url,
-              found_ts=excluded.found_ts
+              found_ts=excluded.found_ts,
+              phone=COALESCE(excluded.phone, stores.phone)
             """,
             payload,
         )
@@ -218,3 +284,9 @@ def set_kv(key: str, value: str) -> None:
             (key, value),
         )
         connect().commit()
+
+
+def forecast_run_utc() -> str:
+    """Start of the newest forecast run. Older forecast rows are history, not current risk:
+    an item that recovers gets no new row, so reading MAX(id) alone kept stale risks on screen."""
+    return get_kv("forecast_run_utc") or ""

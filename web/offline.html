@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text-only — Shelfwatch</title>
+<meta name="theme-color" content="#0a0a0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Shelfwatch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- Nothing here touches the internet: no map tiles, no fonts, no CDN. -->
+<header>
+  <h1>Shelfwatch</h1>
+  <span class="sub" id="snapshot">Loading the saved snapshot…</span>
+  <nav class="nav"><a href="/">Main screen</a><a href="/ask">Ask a question</a></nav>
+</header>
+
+<div class="banner hidden" id="banner"></div>
+
+<div class="offline-now">
+  <div class="panel now" id="now"><h2>Emergency</h2><div class="skel" role="status" aria-label="Loading"><i class="lg w60"></i><i></i><i class="w80"></i><i class="block"></i></div></div>
+</div>
+<main style="grid-template-columns: 1fr 1fr">
+  <section class="col">
+    <div class="searchbox">
+      <input type="search" id="find" placeholder="Filter supplies: water, batteries…" autocomplete="off" aria-label="Filter supplies">
+      <kbd>/</kbd>
+    </div>
+    <div class="col" id="areas"></div>
+  </section>
+  <section class="col">
+    <div class="panel" id="risk"></div>
+    <div class="panel" id="links"></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+// Plain text match on item and store names, so it works with no data from the server.
+function applyFilter() {
+  const query = document.getElementById("find").value.trim().toLowerCase();
+  document.querySelectorAll("#areas .panel").forEach((panel) => {
+    let shown = 0;
+    panel.querySelectorAll(".item").forEach((row) => {
+      const hit = !query || row.textContent.toLowerCase().includes(query);
+      row.style.display = hit ? "" : "none";
+      if (hit) shown += 1;
+    });
+    panel.style.display = !query || shown || !panel.querySelector(".item") ? "" : "none";
+  });
+}
+
+function itemLine(item) {
+  return `<div class="item">
+    <div class="grow">
+      <div><b>${esc(item.name)}</b>${levelTag(item.level)}</div>
+      <div class="meta">${esc(item.store_name || "store in this ZIP")}${item.price ? ` &middot; $${esc(Number(item.price).toFixed(2))}` : ""} &middot; ${esc(item.result_state === "listed" ? "listed, no in-store count" : item.result_state === "no_match" ? "not sold for pickup here" : statusLabel(item.status))} &middot; ${esc(ago(item.checked_min_ago))}</div>
+      ${confidenceHtml(item.confidence)}
+    </div>
+    ${pill(item.status)}
+  </div>`;
+}
+
+// Every saved shelter by island, and who to call. Phone links work with no internet.
+async function loadEmergency() {
+  const [now, list] = await Promise.all([getJSON("/api/now"), getJSON("/api/shelters")]);
+  const byIsland = {};
+  for (const shelter of list.shelters || []) (byIsland[shelter.island || "Other"] ||= []).push(shelter);
+  const groups = Object.entries(byIsland).map(([island, rows]) => `
+    <h3 class="now-sub">${esc(island)}</h3>
+    <ul class="shelters">${rows.map((row) => `<li class="shelter"><div class="shelter-top"><b>${esc(row.name)}</b></div>
+      <div class="meta">${esc(row.address)}${row.when ? ` &middot; reported: ${esc(row.when)}` : ""}</div></li>`).join("")}</ul>`).join("");
+  document.getElementById("now").innerHTML = `
+    <h2>Emergency</h2>
+    <div class="calls">
+      <a class="call urgent" href="tel:911"><span>911</span>Life-threatening emergency</a>
+      <a class="call" href="tel:8089350031"><span>808-935-0031</span>Hawaiʻi County Civil Defense</a>
+      <a class="call" href="tel:8082707285"><span>808-270-7285</span>Maui Emergency Management</a>
+    </div>
+    <p class="now-say">${esc(now.instruction)}</p>
+    <h2>Shelters reported open or opening</h2>
+    ${groups || `<p class="muted">No shelters in the saved research.</p>`}
+    <p class="small muted">From news reports of county announcements${list.researched_hst ? `, researched ${esc(list.researched_hst)}` : ""}. Call before you go.</p>`;
+}
+
+async function load() {
+  const overview = await getJSON("/api/overview");
+  document.getElementById("snapshot").textContent =
+    `Saved data from ${overview.snapshot_hst || "an unknown time"} — Hurricane ${overview.storm_name}`;
+  const banner = document.getElementById("banner");
+  if (overview.online && navigator.onLine) {
+    banner.classList.add("hidden");
+  } else {
+    banner.textContent = `Offline — showing data from ${overview.snapshot_clock_hst || "the last sync"}.`;
+    banner.classList.remove("hidden");
+  }
+
+  const areaNodes = [];
+  for (const area of overview.areas || []) {
+    const stock = await getJSON(`/api/stock?zip=${encodeURIComponent(area.zip)}`);
+    if (stock.shopping_allowed === false) {
+      areaNodes.push(`<div class="panel amber">
+        <h3>${esc(area.area || area.zip)} &middot; ${esc(area.zip)} &middot; ${esc(area.phase)}</h3>
+        <p>${esc(stock.message)}</p>
+        ${tipsHtml(stock.tips)}
+        <ul class="links">${(stock.official_links || []).map((row) => `<li>${link(row.url, row.label || row.title)}</li>`).join("")}</ul>
+      </div>`);
+      continue;
+    }
+    const items = (stock.items || []).map(itemLine).join("");
+    areaNodes.push(`<div class="panel">
+      <h3>${esc(area.area || area.zip)} &middot; ${esc(area.zip)} &middot; ${esc(area.phase)}</h3>
+      ${stock.caution ? `<p class="small">${esc(stock.caution)}</p>` : ""}
+      ${items || `<p class="muted">No confirmed checks saved for this ZIP.</p>`}
+    </div>`);
+  }
+  document.getElementById("areas").innerHTML = areaNodes.join("") ||
+    `<div class="panel"><p class="muted">No areas saved yet.</p></div>`;
+  applyFilter();
+
+  const risk = await getJSON("/api/risk");
+  document.getElementById("risk").innerHTML = `<h2>Running out next</h2>` + ((risk.items || []).length
+    ? (risk.items || []).map((row) => `<div class="step"><b>${esc(row.name)}</b> ${esc(row.zip)} &middot; ${esc(row.risk_pct)}%<div class="small muted">${esc(row.reason)}</div></div>`).join("")
+    : `<p class="muted">Nothing flagged yet.</p>`);
+
+  const links = await getJSON("/api/links?limit=14");
+  document.getElementById("links").innerHTML = `<h2>Official sources and shelters</h2>` +
+    `<ul class="links">${(links.links || []).map((row) => `<li>${link(row.url, row.label || row.title)} <span class="tag">${esc(row.kind)}</span></li>`).join("")}</ul>` +
+    ((links.news || []).length ? `<h3>News reports (not official)</h3><ul class="links">${links.news.map((row) => `<li>${link(row.url, row.label || row.title)}</li>`).join("")}</ul>` : "") +
+    `<p class="small muted">Links need the internet. The stock, phases and shelter names above are saved locally.</p>`;
+}
+
+document.getElementById("find").addEventListener("input", applyFilter);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "/" && document.activeElement.tagName !== "INPUT") {
+    event.preventDefault();
+    document.getElementById("find").focus();
+  }
+});
+
+loadEmergency().catch(() => {});
+load().catch((error) => {
+  document.getElementById("snapshot").textContent = `Could not read the snapshot: ${error.message}`;
+});
+setInterval(() => load().catch(() => {}), 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent status — Shelfwatch</title>
+<meta name="theme-color" content="#0a0a0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Shelfwatch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- Operator view: run one search cycle and inspect what it did. Residents use the main screen. -->
+<header>
+  <h1>Agent status</h1>
+  <span class="sub">Run a fresh search on demand for the demo</span>
+  <nav class="nav"><a href="/">Main screen</a></nav>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="banner hidden" id="banner"></div>
+
+<main class="agent-main">
+  <div class="panel journal" id="journal">
+    <div class="jr-head">
+      <h2>Agent journal</h2>
+      <div class="jr-actions">
+        <span class="jr-live idle" id="jr-live">Manual</span>
+        <button type="button" class="primary" id="run-search">Run search</button>
+      </div>
+    </div>
+    <div class="jr-now" id="jr-now"><div class="skel" role="status" aria-label="Loading"><i class="w60"></i><i class="bar"></i><i class="w40"></i></div></div>
+    <p class="jr-error hidden" id="jr-error" role="alert"></p>
+    <ol class="jr-list" id="jr-list"></ol>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+function chip(text, cls = "") {
+  return `<span class="chip ${cls}">${text}</span>`;
+}
+
+function renderHeader(data) {
+  const agent = data.agent || {};
+  document.getElementById("chips").innerHTML = [
+    chip(`Agent <b>${agent.running ? "searching" : "manual"}</b> · step ${esc(agent.step ?? 0)}`, agent.running ? "live" : ""),
+    chip(`Phase <b>${esc(agent.phase || "—")}</b>`),
+    chip(agent.last_step_hst ? `Last step <b>${esc(agent.last_step_hst)}</b>` : "No steps yet"),
+    chip(`Data as of <b>${esc(data.snapshot_clock_hst || "—")}</b>`),
+    chip(agent.pending_checks ? `<b>${esc(agent.pending_checks)}</b> checks running at Nimble` : "No checks in flight"),
+    chip(`Nimble calls left <b>${esc((data.budgets || {}).nimble ?? "—")}</b>`),
+    chip(data.online ? "Internet <b>up</b>" : "Internet <b>down</b>", data.online ? "live" : "stale"),
+  ].join("");
+}
+
+async function refreshHeader() {
+  try {
+    const data = await getJSON("/api/overview");
+    renderHeader(data);
+    const banner = document.getElementById("banner");
+    if (data.online && navigator.onLine) banner.classList.add("hidden");
+    else {
+      banner.textContent = `Offline — web work is paused. Data as of ${data.snapshot_clock_hst || "the last sync"}.`;
+      banner.classList.remove("hidden");
+    }
+  } catch (error) {
+    /* Keep the last chips on screen. */
+  }
+}
+
+// ── Agent journal ──────────────────────────────────────
+// A search runs only when the operator presses the button. The one-second tick only
+// keeps the age labels current; it never starts or polls agent work.
+let journal = { steps: [], running: false, pending_checks: 0 };
+let journalTopStep = null;
+
+const STATUS_WORDS = { in_stock: "available online", low: "few online", out: "none online", unknown: "not matched" };
+
+function since(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 10) return `${m}m ${String(s % 60).padStart(2, "0")}s ago`;
+  if (m < 60) return `${m} min ago`;
+  return `${Math.floor(m / 60)}h ${m % 60}m ago`;
+}
+
+function took(ms) {
+  return ms ? ` &middot; took ${Math.round(ms / 1000)}s` : "";
+}
+
+// Quiet steps (nothing sent, nothing back) fold into one line so real work stands out.
+function groupSteps(steps) {
+  const groups = [];
+  for (const step of steps) {
+    const last = groups[groups.length - 1];
+    if (step.facts.kind === "quiet" && last && last.kind === "quiet") last.steps.push(step);
+    else groups.push({ kind: step.facts.kind, steps: [step] });
+  }
+  return groups;
+}
+
+function statusBar(statuses, total) {
+  const order = ["in_stock", "low", "out", "unknown"];
+  const segs = order.filter((k) => statuses[k]).map((k) =>
+    `<span class="seg ${k}" style="flex:${statuses[k]}"></span>`).join("");
+  const legend = order.filter((k) => statuses[k]).map((k) =>
+    `<span class="lg ${k}">${statuses[k]} ${STATUS_WORDS[k]}</span>`).join("");
+  return `<div class="jr-bar" aria-label="${esc(total)} checks">${segs}</div><div class="jr-legend">${legend}</div>`;
+}
+
+function stepMeta(step) {
+  return `<div class="jr-meta"><span>${esc(step.ts_hst || "")} &middot; step ${esc(step.step)}${took(step.duration_ms)}</span>` +
+    `<span class="jr-ago" data-ts="${esc(step.ts_utc)}"></span></div>`;
+}
+
+function groupHtml(group, isNew) {
+  const step = group.steps[0];
+  const f = step.facts;
+  const cls = `jr-item ${group.kind}${isNew ? " jr-new" : ""}`;
+  if (group.kind === "quiet") {
+    const n = group.steps.length;
+    const oldest = group.steps[n - 1];
+    const range = n > 1 ? `${esc(oldest.ts_hst)} – ${esc(step.ts_hst)} &middot; steps ${esc(oldest.step)}–${esc(step.step)}` : `${esc(step.ts_hst)} &middot; step ${esc(step.step)}`;
+    const waiting = f.running ? `waiting on ${f.running} checks at Nimble` : "nothing due";
+    return `<li class="${cls}"><div class="jr-quiet"><span>${n > 1 ? `${n} quiet cycles` : "Quiet cycle"} &middot; ${waiting}</span>` +
+      `<span class="jr-ago" data-ts="${esc(step.ts_utc)}"></span></div><div class="jr-meta"><span>${range}</span></div></li>`;
+  }
+  if (group.kind === "results") {
+    const low = f.low_items.length ? `<div class="jr-chips">${f.low_items.map((name) => `<span class="jr-chip warn">${esc(name)}</span>`).join("")}</div>` : "";
+    const extra = [
+      f.new_stores ? `+${f.new_stores} stores found` : "",
+      f.started ? `sent ${f.started} new checks` : "",
+    ].filter(Boolean).join(" &middot; ");
+    return `<li class="${cls}">${stepMeta(step)}
+      <div class="jr-title">${f.recorded ? `${f.recorded} stock results came back` : `Found ${f.new_stores} new stores`}</div>
+      ${f.recorded ? statusBar(f.statuses, f.recorded) : ""}${low}
+      ${extra ? `<div class="jr-sub">${extra}</div>` : ""}</li>`;
+  }
+  if (group.kind === "dispatch") {
+    return `<li class="${cls}">${stepMeta(step)}
+      <div class="jr-title">Sent ${f.started} stock checks to Nimble</div>
+      <div class="jr-sub">${f.running} in flight &middot; results land in a later cycle</div></li>`;
+  }
+  if (group.kind === "decision") {
+    const title = f.phase_changes.length
+      ? `Phase change: ${f.phase_changes.map((c) => `${c.zip} ${c.from} → ${c.to}`).join(", ")}`
+      : "Agent corrected its own rule";
+    const body = f.phase_changes.length ? "" : `<p class="jr-body">${esc(step.summary)}</p>`;
+    return `<li class="${cls}">${stepMeta(step)}<div class="jr-title">${esc(title)}</div>${body}</li>`;
+  }
+  return `<li class="${cls}">${stepMeta(step)}<div class="jr-title">${esc(step.summary)}</div></li>`;
+}
+
+function renderJournalList() {
+  const list = document.getElementById("jr-list");
+  const steps = journal.steps;
+  if (!steps.length) {
+    list.innerHTML = `<li class="muted small">The agent has not logged a step yet.</li>`;
+    return;
+  }
+  const previousTop = journalTopStep;
+  journalTopStep = steps[0].step;
+  list.innerHTML = groupSteps(steps).map((group) =>
+    groupHtml(group, previousTop != null && group.steps[0].step > previousTop)).join("");
+}
+
+// Runs every second: working state and every "x ago" label.
+function tickJournal() {
+  const now = Date.now();
+  document.querySelectorAll(".jr-ago").forEach((node) => {
+    node.textContent = since(now - Date.parse(node.dataset.ts));
+  });
+  const box = document.getElementById("jr-now");
+  const live = document.getElementById("jr-live");
+  const last = journal.steps[0];
+  const elapsed = last ? now - Date.parse(last.ts_utc) : null;
+  const state = journal.running ? "working" : "idle";
+  const label = journal.running
+    ? "Search running: reading storm, stores and stock"
+    : "Ready — run a search when you want fresh data";
+  live.className = `jr-live ${state}`;
+  live.textContent = journal.running ? "Running" : "Manual";
+  const pending = journal.pending_checks;
+  box.className = `jr-now ${state}`;
+  box.innerHTML = `
+    <div class="jr-now-row"><span class="jr-state">${esc(label)}</span><span class="jr-count">step ${esc(last?.step ?? 0)}</span></div>
+    ${journal.running ? `<div class="jr-progress"><span style="width:100%"></span></div>` : ""}
+    <div class="jr-now-row small"><span class="muted">${last ? `Last run ${since(elapsed)}${took(last.duration_ms)}` : "No runs yet"}</span></div>
+    ${pending ? `<div class="jr-flight"><span class="jr-flight-bar"></span><span>${esc(pending)} checks in flight at Nimble</span></div>` : ""}`;
+}
+
+async function refreshJournal() {
+  try {
+    const data = await getJSON("/api/journal?limit=30");
+    const changed = !journal.steps.length || data.steps[0]?.step !== journal.steps[0]?.step;
+    journal = data;
+    if (changed) renderJournalList();
+    tickJournal();
+  } catch (error) {
+    /* Keep the last journal on screen; the header banner already says we're offline. */
+  }
+}
+
+async function runSearch() {
+  const button = document.getElementById("run-search");
+  const error = document.getElementById("jr-error");
+  button.disabled = true;
+  button.textContent = "Searching…";
+  error.classList.add("hidden");
+  journal.running = true;
+  tickJournal();
+  await refreshHeader();
+  try {
+    await postJSON("/api/agent/run", {}, 300000);
+  } catch (requestError) {
+    error.textContent = "The search did not finish. Check the server output, then try again.";
+    error.classList.remove("hidden");
+  } finally {
+    journal.running = false;
+    button.disabled = false;
+    button.textContent = "Run search";
+    await Promise.all([refreshJournal(), refreshHeader()]);
+  }
+}
+
+document.getElementById("run-search").addEventListener("click", runSearch);
+refreshHeader();
+setInterval(refreshHeader, 20000);
+refreshJournal();
+setInterval(tickJournal, 1000);
+</script>
+</body>
+</html>

@@ -97,9 +97,10 @@ async def search(
     depth: str = "lite",
     max_results: int = 8,
     time_range: str | None = None,
+    mock_file: str = "nimble_search.json",
 ) -> list[dict]:
     if MOCK_NIMBLE:
-        return list(_load("nimble_search.json"))
+        return list(_load(mock_file))
     # Focus modes require search_depth="lite".
     search_depth = "lite" if focus else depth
 
@@ -193,7 +194,7 @@ async def run_template(name: str, params: dict) -> dict:
 async def run_template_start(name: str, params: dict) -> str:
     """POST /v2/extract/templates/async. Returns the task id. Does not wait."""
     if MOCK_NIMBLE:
-        return f"mock-task-{name}"
+        return f"mock-task-{name}-{time.time_ns()}"
 
     def _go():
         kwargs = {"template": name, "params": params}

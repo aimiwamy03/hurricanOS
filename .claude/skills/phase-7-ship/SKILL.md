@@ -1,6 +1,6 @@
 ---
 name: phase-7-ship
-description: Phase 7 of Storm Supply Scout. Feature freeze and ship: README with pitch, architecture and sponsor tools, a secrets audit before making the repo public, demo rehearsal including the wifi-off moment, demo video recording checklist, and the hackathon submission checklist. Use whenever the user says "phase 7", "ship", "README", "submit", "demo video", "make the repo public", or it is after 3:30 PT.
+description: Phase 7 of Shelfwatch. Feature freeze and ship: README with pitch, architecture and sponsor tools, a secrets audit before making the repo public, demo rehearsal including the wifi-off moment, demo video recording checklist, and the hackathon submission checklist. Use whenever the user says "phase 7", "ship", "README", "submit", "demo video", "make the repo public", or it is after 3:30 PT.
 ---
 
 # Phase 7 — Ship

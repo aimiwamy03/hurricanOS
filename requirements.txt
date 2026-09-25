@@ -8,3 +8,4 @@ tenacity
 nimble_python
 pillow
 tinybird-sdk
+mlx-lm==0.31.3  # Apple Silicon only: serves the local Liquid model

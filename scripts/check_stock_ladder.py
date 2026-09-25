@@ -174,7 +174,7 @@ def rung_agent(client: Nimble) -> None:
             "in Hilo, Hawaii ZIP 96720? Cite the store page. Do not guess."
         ),
         effort="low",
-        agent_name="storm-supply-scout-flashlight-96720",
+        agent_name="shelfwatch-flashlight-96720",
     )
     print(f"started run {run.id} status={run.status} agent={run.web_search_agent_id}")
     polled = client.agents.runs.get(run.id, agent_id=run.web_search_agent_id)
